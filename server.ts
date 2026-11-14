@@ -2,7 +2,11 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { classifyProspectOpportunity, discoverWebsiteSocials } from './src/api-handler.ts';
+import {
+  classifyProspectOpportunity,
+  discoverWebsiteSocials,
+  searchPlacesTextProxy,
+} from './src/api-handler.ts';
 
 dotenv.config();
 process.env.DISABLE_HMR = 'true';
@@ -42,6 +46,22 @@ async function startServer() {
       res.status(500).json({
         error: 'Failed to discover website socials',
         details: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // API route for server-side Places API (New) text search fallback
+  app.post('/api/places-search', async (req, res) => {
+    try {
+      const result = await searchPlacesTextProxy(req.body);
+      res.status(result.status).json(result);
+    } catch (error) {
+      console.error('Error in /api/places-search:', error);
+      res.status(500).json({
+        ok: false,
+        status: 500,
+        errorCode: 'INTERNAL_ERROR',
+        errorMessage: error instanceof Error ? error.message : String(error),
       });
     }
   });

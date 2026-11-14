@@ -159,46 +159,95 @@ const SearchEngine: React.FC<{
     setHasSearched(true);
 
     try {
-      if (!placesLib) {
-        throw new Error('Google Maps Places Library is still initializing. Please wait a moment.');
-      }
-
       // Build query string across all supported industries (e.g. "Marketing Agencies in Austin, Texas")
       const textQuery = buildPlaceSearchQuery(filters);
 
-      const request: any = {
-        textQuery,
-        fields: [
-          'id',
-          'displayName',
-          'formattedAddress',
-          'googleMapsURI',
-          'websiteURI',
-          'nationalPhoneNumber',
-          'rating',
-          'userRatingCount',
-          'location',
-          'types',
-          'reviews',
-        ],
-        isOpenNow: false,
-        maxResultCount: filters.maxResults,
-      };
+      let rawResults: any[] = [];
+      let clientSearchError: any = null;
 
-      if (filters.minRating > 0) {
-        request.minRating = filters.minRating;
+      if (placesLib && GOOGLE_MAPS_API_KEY) {
+        try {
+          const request: any = {
+            textQuery,
+            fields: [
+              'id',
+              'displayName',
+              'formattedAddress',
+              'googleMapsURI',
+              'websiteURI',
+              'nationalPhoneNumber',
+              'rating',
+              'userRatingCount',
+              'location',
+              'types',
+              'reviews',
+            ],
+            isOpenNow: false,
+            maxResultCount: filters.maxResults,
+            internalUsageAttributionIds: ['gmp_mcp_codeassist_v1_aistudio'],
+          };
+
+          if (filters.minRating > 0) {
+            request.minRating = filters.minRating;
+          }
+
+          // Call modern Place.searchByText
+          const { places: searchResults } =
+            await google.maps.places.Place.searchByText(request);
+          rawResults = searchResults || [];
+        } catch (sdkErr: any) {
+          clientSearchError = sdkErr;
+          const sdkMsg = sdkErr?.message || String(sdkErr);
+          const isPermissionOrOriginError =
+            sdkMsg.includes('PERMISSION_DENIED') ||
+            sdkMsg.includes('Permission denied') ||
+            sdkMsg.includes('ApiNotActivated') ||
+            sdkMsg.includes('RefererNotAllowed');
+
+          if (!isPermissionOrOriginError) {
+            throw sdkErr;
+          }
+        }
       }
 
-      // Call modern Place.searchByText
-      const { places: searchResults } = await google.maps.places.Place.searchByText(request);
+      // Automatic fallback to server-side /api/places-search proxy if SDK wasn't ready or hit permission/referrer restrictions
+      if (clientSearchError || !placesLib || !GOOGLE_MAPS_API_KEY) {
+        const proxyResponse = await fetch('/api/places-search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            textQuery,
+            minRating: filters.minRating,
+            maxResultCount: filters.maxResults,
+          }),
+        });
 
-      if (!searchResults || searchResults.length === 0) {
+        const proxyData = await proxyResponse.json().catch(() => null);
+        if (proxyResponse.ok && proxyData?.ok) {
+          rawResults = proxyData.places || [];
+        } else {
+          // Preserve original client SDK error message when available, paired with proxy context
+          const proxyErrText = proxyData?.errorMessage
+            ? `${proxyData.errorCode ? `${proxyData.errorCode}: ` : ''}${proxyData.errorMessage}`
+            : '';
+          const primaryMsg =
+            clientSearchError?.message ||
+            (clientSearchError ? String(clientSearchError) : '') ||
+            proxyErrText ||
+            (!GOOGLE_MAPS_API_KEY
+              ? 'MISSING_API_KEY: Google Maps API key (VITE_GOOGLE_MAPS_API_KEY) is not configured.'
+              : 'Google Maps Places Library is unavailable.');
+          throw new Error(primaryMsg);
+        }
+      }
+
+      if (!rawResults || rawResults.length === 0) {
         setPlaces([]);
         setIsLoading(false);
         return;
       }
 
-      const formatted: DiscoveredPlace[] = searchResults.map((p: any) => {
+      const formatted: DiscoveredPlace[] = rawResults.map((p: any) => {
         // Safe extraction of displayName
         let displayName = 'Business';
         if (typeof p.displayName === 'string') {
@@ -232,11 +281,11 @@ const SearchEngine: React.FC<{
 
         // Sample reviews with strictly labeled NOT VERIFIED owner replies
         const sampleReviews = (p.reviews || []).slice(0, 5).map((r: any) => ({
-          authorName: r.authorAttribution?.displayName || 'Google Reviewer',
+          authorName: r.authorName || r.authorAttribution?.displayName || 'Google Reviewer',
           rating: r.rating,
-          relativePublishTime: r.relativePublishTimeDescription,
+          relativePublishTime: r.relativePublishTime || r.relativePublishTimeDescription,
           publishTime: r.publishTime,
-          text: r.text,
+          text: typeof r.text === 'string' ? r.text : r.text?.text,
           ownerResponseStatus: 'NOT VERIFIED' as const,
         }));
 
@@ -272,9 +321,9 @@ const SearchEngine: React.FC<{
         setSelectedPlaceId(formatted[0].id);
       }
 
-      // Automatically auto-discover socials (website scan + Google Search & directory fallback)
+      // Automatically auto-discover socials (website scan + directory & Google Search fallback)
       const queue = [...formatted];
-      const concurrency = 3;
+      const concurrency = 2;
       const runWorker = async () => {
         while (queue.length > 0) {
           const place = queue.shift();
@@ -462,12 +511,45 @@ const SearchEngine: React.FC<{
           {searchError && (
             <div className="p-4 rounded-2xl bg-rose-950/40 border border-rose-500/30 flex items-start gap-3 text-rose-200 text-xs sm:text-sm">
               <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
-              <div>
-                <strong className="font-bold text-white block">Search Error</strong>
-                <p>{searchError}</p>
+              <div className="space-y-2 flex-1">
+                <div>
+                  <strong className="font-bold text-white block">Search Error</strong>
+                  <p className="font-mono text-xs text-rose-200/95 break-words">{searchError}</p>
+                </div>
+
+                {(searchError.includes('PERMISSION_DENIED') ||
+                  searchError.includes('Permission denied') ||
+                  searchError.includes('MISSING_API_KEY') ||
+                  searchError.includes('ApiNotActivated') ||
+                  searchError.includes('RefererNotAllowed')) && (
+                  <div className="p-3 rounded-xl bg-slate-900/80 border border-rose-500/20 text-xs text-slate-300 space-y-1.5">
+                    <div className="font-semibold text-white">
+                      How to fix Google Places API permissions (Vercel &amp; Google Cloud):
+                    </div>
+                    <ol className="list-decimal list-inside space-y-1 text-slate-300/90">
+                      <li>
+                        In <strong>Google Cloud Console → APIs &amp; Services → Library</strong>, enable{' '}
+                        <code className="text-emerald-300">Places API (New)</code> (not only the legacy Places API) and{' '}
+                        <code className="text-emerald-300">Maps JavaScript API</code>, and verify Billing is enabled on the project.
+                      </li>
+                      <li>
+                        In <strong>Credentials → your API Key</strong>, verify <em>API restrictions</em> include{' '}
+                        <code className="text-emerald-300">Places API (New)</code> and{' '}
+                        <em>Website (HTTP referrer) restrictions</em> include{' '}
+                        <code className="text-emerald-300">https://*.vercel.app/*</code> (plus your custom domain). Note: AI Studio&apos;s free preview key is restricted and will not authorize external Vercel deployments.
+                      </li>
+                      <li>
+                        In <strong>Vercel → Settings → Environment Variables</strong>, set{' '}
+                        <code className="text-emerald-300">VITE_GOOGLE_MAPS_API_KEY</code> (and optionally{' '}
+                        <code className="text-emerald-300">GOOGLE_MAPS_API_KEY</code> for server fallback), then trigger a fresh <strong>Redeploy</strong>.
+                      </li>
+                    </ol>
+                  </div>
+                )}
+
                 <button
                   onClick={handleExecuteSearch}
-                  className="mt-2 text-xs font-semibold text-rose-300 underline hover:text-white"
+                  className="text-xs font-semibold text-rose-300 underline hover:text-white cursor-pointer"
                 >
                   Try Again
                 </button>

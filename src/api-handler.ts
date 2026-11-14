@@ -34,9 +34,59 @@ interface ExtractedSocials {
   websiteEmail?: string;
 }
 
+let geminiQuotaCooldownUntil = 0;
+let lastCooldownLogAt = 0;
+let geminiSearchQueue: Promise<void> = Promise.resolve();
+
+function isRateLimitOrQuotaError(err: unknown): boolean {
+  const msg =
+    err instanceof Error
+      ? err.message
+      : typeof err === 'string'
+        ? err
+        : JSON.stringify(err || '');
+  return (
+    msg.includes('429') ||
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.toLowerCase().includes('quota') ||
+    msg.toLowerCase().includes('rate limit')
+  );
+}
+
+function triggerGeminiCooldown(err: unknown): void {
+  const now = Date.now();
+  // Enter a 5-minute cooldown when Gemini quota/rate limits are reached
+  geminiQuotaCooldownUntil = now + 5 * 60 * 1000;
+  if (now - lastCooldownLogAt > 60_000) {
+    lastCooldownLogAt = now;
+    console.info(
+      'Gemini API rate limit/quota reached; pausing Gemini calls for 5 minutes and using free directory & rule-based fallbacks.'
+    );
+  }
+  void err;
+}
+
+function isGeminiAvailable(): boolean {
+  return Date.now() >= geminiQuotaCooldownUntil;
+}
+
+function enqueueGeminiSearch<T>(task: () => Promise<T>): Promise<T> {
+  const run = geminiSearchQueue.then(async () => {
+    const result = await task();
+    // Brief spacing between Gemini Google Search calls to stay within RPM limits
+    await new Promise((r) => setTimeout(r, 350));
+    return result;
+  });
+  geminiSearchQueue = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
 function getGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return null;
+  if (!apiKey || !isGeminiAvailable()) return null;
   return new GoogleGenAI({
     apiKey,
     httpOptions: {
@@ -339,13 +389,18 @@ async function discoverSocialsViaGoogleSearch(
   socials: ExtractedSocials;
   discoveredSources: Array<{ title?: string; url: string }>;
 }> {
-  const ai = getGeminiClient();
-  if (!ai || !businessName.trim()) {
+  if (!businessName.trim() || !isGeminiAvailable() || !process.env.GEMINI_API_KEY) {
     return { socials: {}, discoveredSources: [] };
   }
 
-  const locationStr = [city, state].filter(Boolean).join(', ');
-  const prompt = `Use Google Search to find the official social media profiles (especially Instagram) for this specific US business across Google, Instagram, Facebook, TikTok, LinkedIn, Linktree, Yelp, Clutch, or other business directories.
+  return enqueueGeminiSearch(async () => {
+    const ai = getGeminiClient();
+    if (!ai) {
+      return { socials: {}, discoveredSources: [] };
+    }
+
+    const locationStr = [city, state].filter(Boolean).join(', ');
+    const prompt = `Use Google Search to find the official social media profiles (especially Instagram) for this specific US business across Google, Instagram, Facebook, TikTok, LinkedIn, Linktree, Yelp, Clutch, or other business directories.
 
 Business Name: ${businessName}
 Location: ${locationStr || 'United States'}
@@ -364,95 +419,105 @@ Strict rules:
   "email": "public@domain.com" or null
 }`;
 
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
-      contents: prompt,
-      config: {
-        tools: [{ googleSearch: {} }],
-      },
-    });
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: prompt,
+        config: {
+          tools: [{ googleSearch: {} }],
+        },
+      });
 
-    const discoveredSources: Array<{ title?: string; url: string }> = [];
-    const socials: ExtractedSocials = {};
+      const discoveredSources: Array<{ title?: string; url: string }> = [];
+      const socials: ExtractedSocials = {};
 
-    // Extract verified links from Google Search grounding metadata
-    const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-    for (const chunk of chunks) {
-      const uri = chunk.web?.uri;
-      const title = chunk.web?.title;
-      if (uri) {
-        discoveredSources.push({ title: title || undefined, url: uri });
+      // Extract verified links from Google Search grounding metadata
+      const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+      for (const chunk of chunks) {
+        const uri = chunk.web?.uri;
+        const title = chunk.web?.title;
+        if (uri) {
+          discoveredSources.push({ title: title || undefined, url: uri });
 
-        // Check if grounding chunk URI itself is a direct social profile
-        if (!socials.instagram) {
-          const ig = normalizeInstagramUrl(uri);
+          if (!socials.instagram) {
+            const ig = normalizeInstagramUrl(uri);
+            if (ig.url) {
+              socials.instagram = ig.url;
+              socials.instagramHandle = ig.handle;
+            }
+          }
+          if (!socials.facebook) {
+            socials.facebook = normalizeFacebookUrl(uri);
+          }
+          if (!socials.tiktok) {
+            socials.tiktok = normalizeTikTokUrl(uri);
+          }
+          if (!socials.twitter) {
+            socials.twitter = normalizeTwitterUrl(uri);
+          }
+          if (!socials.youtube) {
+            socials.youtube = normalizeYouTubeUrl(uri);
+          }
+        }
+      }
+
+      // Parse structured JSON response from Gemini
+      const parsed = response.text ? extractJsonObject(response.text) : null;
+      if (parsed) {
+        if (!socials.instagram && typeof parsed.instagram === 'string') {
+          const ig = normalizeInstagramUrl(parsed.instagram);
           if (ig.url) {
             socials.instagram = ig.url;
             socials.instagramHandle = ig.handle;
           }
         }
-        if (!socials.facebook) {
-          socials.facebook = normalizeFacebookUrl(uri);
+        if (!socials.facebook && typeof parsed.facebook === 'string') {
+          socials.facebook = normalizeFacebookUrl(parsed.facebook);
         }
-        if (!socials.tiktok) {
-          socials.tiktok = normalizeTikTokUrl(uri);
+        if (!socials.tiktok && typeof parsed.tiktok === 'string') {
+          socials.tiktok = normalizeTikTokUrl(parsed.tiktok);
         }
-        if (!socials.twitter) {
-          socials.twitter = normalizeTwitterUrl(uri);
+        if (!socials.twitter && typeof parsed.twitter === 'string') {
+          socials.twitter = normalizeTwitterUrl(parsed.twitter);
         }
-        if (!socials.youtube) {
-          socials.youtube = normalizeYouTubeUrl(uri);
+        if (!socials.youtube && typeof parsed.youtube === 'string') {
+          socials.youtube = normalizeYouTubeUrl(parsed.youtube);
+        }
+        if (typeof parsed.email === 'string') {
+          const emailMatch = parsed.email
+            .trim()
+            .toLowerCase()
+            .match(/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/);
+          if (emailMatch && !parsed.email.includes('example.com')) {
+            socials.websiteEmail = emailMatch[0];
+          }
         }
       }
-    }
 
-    // Parse structured JSON response from Gemini
-    const parsed = response.text ? extractJsonObject(response.text) : null;
-    if (parsed) {
-      if (!socials.instagram && typeof parsed.instagram === 'string') {
-        const ig = normalizeInstagramUrl(parsed.instagram);
-        if (ig.url) {
-          socials.instagram = ig.url;
-          socials.instagramHandle = ig.handle;
+      // Deduplicate discoveredSources up to 5 entries
+      const uniqueSources: Array<{ title?: string; url: string }> = [];
+      const seenUrls = new Set<string>();
+      for (const src of discoveredSources) {
+        if (!seenUrls.has(src.url)) {
+          seenUrls.add(src.url);
+          uniqueSources.push(src);
+          if (uniqueSources.length >= 5) break;
         }
       }
-      if (!socials.facebook && typeof parsed.facebook === 'string') {
-        socials.facebook = normalizeFacebookUrl(parsed.facebook);
-      }
-      if (!socials.tiktok && typeof parsed.tiktok === 'string') {
-        socials.tiktok = normalizeTikTokUrl(parsed.tiktok);
-      }
-      if (!socials.twitter && typeof parsed.twitter === 'string') {
-        socials.twitter = normalizeTwitterUrl(parsed.twitter);
-      }
-      if (!socials.youtube && typeof parsed.youtube === 'string') {
-        socials.youtube = normalizeYouTubeUrl(parsed.youtube);
-      }
-      if (typeof parsed.email === 'string') {
-        const emailMatch = parsed.email.trim().toLowerCase().match(/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/);
-        if (emailMatch && !parsed.email.includes('example.com')) {
-          socials.websiteEmail = emailMatch[0];
-        }
-      }
-    }
 
-    // Deduplicate discoveredSources up to 5 entries
-    const uniqueSources: Array<{ title?: string; url: string }> = [];
-    const seenUrls = new Set<string>();
-    for (const src of discoveredSources) {
-      if (!seenUrls.has(src.url)) {
-        seenUrls.add(src.url);
-        uniqueSources.push(src);
-        if (uniqueSources.length >= 5) break;
+      return { socials, discoveredSources: uniqueSources };
+    } catch (err) {
+      if (isRateLimitOrQuotaError(err)) {
+        triggerGeminiCooldown(err);
+      } else {
+        console.info(
+          `Google Search social discovery skipped for "${businessName}":`,
+          err instanceof Error ? err.message : 'unavailable'
+        );
       }
+      return { socials: {}, discoveredSources: [] };
     }
-
-    return { socials, discoveredSources: uniqueSources };
-  } catch (err) {
-    console.warn(`Google Search social discovery failed for "${businessName}":`, err);
-    return { socials: {}, discoveredSources: [] };
-  }
+  });
 }
 
 async function fetchJsonWithTimeout(url: string, timeoutMs = 4500): Promise<any | null> {
@@ -657,11 +722,16 @@ async function discoverSocialsViaOpenDirectories(
   return { socials, discoveredSources };
 }
 
+const socialDiscoveryCache = new Map<
+  string,
+  { expiresAt: number; data: SocialProfiles }
+>();
+
 /**
  * Discovers social media presence (especially Instagram):
- * 1. Scans the restaurant's official website (and Linktree / contact pages) if available.
- * 2. If socials (especially Instagram) are not found on the website or no website exists,
- *    falls back to Google Search grounding and open directory sites (OpenStreetMap / Wikidata).
+ * 1. Scans the business's official website (and Linktree / contact pages) if available.
+ * 2. Checks free open directories (OpenStreetMap Nominatim & Wikidata) before consuming API quota.
+ * 3. If Instagram or socials are still missing, falls back to rate-limited Gemini Google Search grounding.
  */
 export async function discoverWebsiteSocials(
   websiteUrl: string,
@@ -669,6 +739,12 @@ export async function discoverWebsiteSocials(
   city: string = '',
   state: string = ''
 ): Promise<SocialProfiles> {
+  const cacheKey = `${websiteUrl}|${businessName}|${city}|${state}`.toLowerCase().trim();
+  const cached = socialDiscoveryCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data;
+  }
+
   const searchQuery = `${businessName} ${city} ${state}`.trim();
   const instagramSearchUrl = `https://www.google.com/search?q=site%3Ainstagram.com+${encodeURIComponent(
     searchQuery
@@ -687,35 +763,36 @@ export async function discoverWebsiteSocials(
   let externalSocials: ExtractedSocials = {};
   let discoveredSources: Array<{ title?: string; url: string }> = [];
 
-  // Stage 2: If Instagram or socials are missing on the website (or no website exists), check Google & other sites
+  // Stage 2: Check free open directories (OpenStreetMap & Wikidata) if Instagram or socials are missing
   if (!siteSocials.instagram || !foundOnWebsite) {
-    const googleResult = await discoverSocialsViaGoogleSearch(
+    const dirResult = await discoverSocialsViaOpenDirectories(
       businessName,
       city,
       state,
       websiteUrl
     );
-    externalSocials = { ...googleResult.socials };
-    discoveredSources = [...googleResult.discoveredSources];
+    externalSocials = { ...dirResult.socials };
+    discoveredSources = [...dirResult.discoveredSources];
 
-    // Stage 3: Check open directories (OpenStreetMap & Wikidata) if Instagram or socials are still missing
-    if (!siteSocials.instagram && !externalSocials.instagram) {
-      const dirResult = await discoverSocialsViaOpenDirectories(
+    // Stage 3: Fall back to Gemini Google Search grounding only if Instagram is still missing and quota allows
+    if (!siteSocials.instagram && !externalSocials.instagram && isGeminiAvailable()) {
+      const googleResult = await discoverSocialsViaGoogleSearch(
         businessName,
         city,
         state,
         websiteUrl
       );
       externalSocials = {
-        instagram: externalSocials.instagram || dirResult.socials.instagram,
-        instagramHandle: externalSocials.instagramHandle || dirResult.socials.instagramHandle,
-        facebook: externalSocials.facebook || dirResult.socials.facebook,
-        tiktok: externalSocials.tiktok || dirResult.socials.tiktok,
-        twitter: externalSocials.twitter || dirResult.socials.twitter,
-        youtube: externalSocials.youtube || dirResult.socials.youtube,
-        websiteEmail: externalSocials.websiteEmail || dirResult.socials.websiteEmail,
+        instagram: externalSocials.instagram || googleResult.socials.instagram,
+        instagramHandle:
+          externalSocials.instagramHandle || googleResult.socials.instagramHandle,
+        facebook: externalSocials.facebook || googleResult.socials.facebook,
+        tiktok: externalSocials.tiktok || googleResult.socials.tiktok,
+        twitter: externalSocials.twitter || googleResult.socials.twitter,
+        youtube: externalSocials.youtube || googleResult.socials.youtube,
+        websiteEmail: externalSocials.websiteEmail || googleResult.socials.websiteEmail,
       };
-      for (const src of dirResult.discoveredSources) {
+      for (const src of googleResult.discoveredSources) {
         if (!discoveredSources.some((existing) => existing.url === src.url)) {
           discoveredSources.push(src);
         }
@@ -748,7 +825,7 @@ export async function discoverWebsiteSocials(
     source = 'discovered_via_google_search';
   }
 
-  return {
+  const result: SocialProfiles = {
     instagram,
     instagramHandle,
     facebook,
@@ -761,6 +838,13 @@ export async function discoverWebsiteSocials(
     instagramSearchUrl,
     discoveredSources: discoveredSources.length > 0 ? discoveredSources.slice(0, 5) : undefined,
   };
+
+  socialDiscoveryCache.set(cacheKey, {
+    expiresAt: Date.now() + 10 * 60 * 1000,
+    data: result,
+  });
+
+  return result;
 }
 
 export async function classifyProspectOpportunity(
@@ -854,7 +938,14 @@ Instructions:
         return parsed;
       }
     } catch (err) {
-      console.error('Gemini API classification error, falling back to rule-based evaluation:', err);
+      if (isRateLimitOrQuotaError(err)) {
+        triggerGeminiCooldown(err);
+      } else {
+        console.info(
+          'Gemini API classification skipped, using rule-based evaluation:',
+          err instanceof Error ? err.message : 'unavailable'
+        );
+      }
     }
   }
 
@@ -895,3 +986,141 @@ Instructions:
         : 'Highlight how ReplyNation saves 3+ hours per week by automatically acknowledging every customer review while maintaining brand voice.',
   };
 }
+
+export interface PlacesTextSearchInput {
+  textQuery: string;
+  minRating?: number;
+  maxResultCount?: number;
+}
+
+export interface PlacesProxyResult {
+  ok: boolean;
+  status: number;
+  places?: Array<{
+    id: string;
+    displayName: string;
+    formattedAddress?: string;
+    googleMapsURI?: string;
+    websiteURI?: string;
+    nationalPhoneNumber?: string;
+    rating?: number;
+    userRatingCount?: number;
+    location?: { lat: number; lng: number };
+    types?: string[];
+    reviews?: Array<{
+      authorName: string;
+      rating?: number;
+      relativePublishTime?: string;
+      publishTime?: string;
+      text?: string;
+    }>;
+  }>;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+export async function searchPlacesTextProxy(
+  input: PlacesTextSearchInput
+): Promise<PlacesProxyResult> {
+  const apiKey =
+    process.env.GOOGLE_MAPS_API_KEY ||
+    process.env.GOOGLE_MAPS_SERVER_API_KEY ||
+    process.env.VITE_GOOGLE_MAPS_API_KEY;
+
+  if (!apiKey || apiKey === 'MY_GOOGLE_MAPS_API_KEY') {
+    return {
+      ok: false,
+      status: 400,
+      errorCode: 'MISSING_API_KEY',
+      errorMessage:
+        'Google Maps API key is not configured on this deployment. Add VITE_GOOGLE_MAPS_API_KEY (and optionally GOOGLE_MAPS_API_KEY) in your environment variables and redeploy.',
+    };
+  }
+
+  const textQuery = (input.textQuery || '').trim();
+  if (!textQuery) {
+    return {
+      ok: false,
+      status: 400,
+      errorCode: 'INVALID_REQUEST',
+      errorMessage: 'Search query is required.',
+    };
+  }
+
+  const body: Record<string, unknown> = {
+    textQuery,
+    maxResultCount: Math.min(Math.max(Number(input.maxResultCount) || 10, 1), 20),
+  };
+  if (typeof input.minRating === 'number' && input.minRating > 0) {
+    body.minRating = input.minRating;
+  }
+
+  try {
+    const response = await fetch('https://places.googleapis.com/v1/places:searchText', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-Maps-Solution-ID': 'gmp_mcp_codeassist_v1_aistudio',
+        'X-Goog-FieldMask':
+          'places.id,places.displayName,places.formattedAddress,places.googleMapsUri,places.websiteUri,places.nationalPhoneNumber,places.rating,places.userRatingCount,places.location,places.types,places.reviews',
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(12000),
+    });
+
+    const data: any = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const apiErr = data?.error || {};
+      return {
+        ok: false,
+        status: response.status,
+        errorCode: apiErr.status || `HTTP_${response.status}`,
+        errorMessage:
+          apiErr.message || `Places API (New) returned status ${response.status}.`,
+      };
+    }
+
+    const places = (data.places || []).map((p: any) => ({
+      id: p.id,
+      displayName: p.displayName?.text || 'Business',
+      formattedAddress: p.formattedAddress,
+      googleMapsURI: p.googleMapsUri,
+      websiteURI: p.websiteUri,
+      nationalPhoneNumber: p.nationalPhoneNumber,
+      rating: typeof p.rating === 'number' ? p.rating : undefined,
+      userRatingCount:
+        typeof p.userRatingCount === 'number' ? p.userRatingCount : undefined,
+      location:
+        typeof p.location?.latitude === 'number' &&
+        typeof p.location?.longitude === 'number'
+          ? { lat: p.location.latitude, lng: p.location.longitude }
+          : undefined,
+      types: Array.isArray(p.types) ? p.types : [],
+      reviews: Array.isArray(p.reviews)
+        ? p.reviews.slice(0, 5).map((r: any) => ({
+            authorName: r.authorAttribution?.displayName || 'Google Reviewer',
+            rating: typeof r.rating === 'number' ? r.rating : undefined,
+            relativePublishTime: r.relativePublishTimeDescription,
+            publishTime: r.publishTime,
+            text: typeof r.text === 'string' ? r.text : r.text?.text,
+          }))
+        : [],
+    }));
+
+    return {
+      ok: true,
+      status: 200,
+      places,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 500,
+      errorCode: 'PROXY_FETCH_ERROR',
+      errorMessage: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
