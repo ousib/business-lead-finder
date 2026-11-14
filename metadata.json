@@ -1,0 +1,6 @@
+{
+  "name": "ReplyNation Prospect Finder",
+  "description": "Research and prioritize US restaurants that benefit from ReplyNation AI review response management, using Google Maps place discovery, manual review verification, AI opportunity scoring, and compliant CSV export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
