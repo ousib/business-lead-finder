@@ -1047,72 +1047,172 @@ export async function searchPlacesTextProxy(
     };
   }
 
-  const body: Record<string, unknown> = {
-    textQuery,
-    maxResultCount: Math.min(Math.max(Number(input.maxResultCount) || 10, 1), 20),
-  };
-  if (typeof input.minRating === 'number' && input.minRating > 0) {
-    body.minRating = input.minRating;
-  }
+  const targetLimit = Math.min(Math.max(Number(input.maxResultCount) || 10, 1), 100);
+  const fieldMask =
+    'nextPageToken,places.id,places.displayName,places.formattedAddress,places.googleMapsUri,places.websiteUri,places.nationalPhoneNumber,places.rating,places.userRatingCount,places.location,places.types,places.reviews';
 
-  try {
+  type ProxyPlace = NonNullable<PlacesProxyResult['places']>[number];
+
+  const mapRawPlace = (p: any): ProxyPlace => ({
+    id: p.id,
+    displayName: p.displayName?.text || 'Business',
+    formattedAddress: p.formattedAddress,
+    googleMapsURI: p.googleMapsUri,
+    websiteURI: p.websiteUri,
+    nationalPhoneNumber: p.nationalPhoneNumber,
+    rating: typeof p.rating === 'number' ? p.rating : undefined,
+    userRatingCount:
+      typeof p.userRatingCount === 'number' ? p.userRatingCount : undefined,
+    location:
+      typeof p.location?.latitude === 'number' &&
+      typeof p.location?.longitude === 'number'
+        ? { lat: p.location.latitude, lng: p.location.longitude }
+        : undefined,
+    types: Array.isArray(p.types) ? p.types : [],
+    reviews: Array.isArray(p.reviews)
+      ? p.reviews.slice(0, 5).map((r: any) => ({
+          authorName: r.authorAttribution?.displayName || 'Google Reviewer',
+          rating: typeof r.rating === 'number' ? r.rating : undefined,
+          relativePublishTime: r.relativePublishTimeDescription,
+          publishTime: r.publishTime,
+          text: typeof r.text === 'string' ? r.text : r.text?.text,
+        }))
+      : [],
+  });
+
+  const fetchSearchPage = async (reqBody: Record<string, unknown>) => {
     const response = await fetch('https://places.googleapis.com/v1/places:searchText', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': apiKey,
         'X-Goog-Maps-Solution-ID': 'gmp_mcp_codeassist_v1_aistudio',
-        'X-Goog-FieldMask':
-          'places.id,places.displayName,places.formattedAddress,places.googleMapsUri,places.websiteUri,places.nationalPhoneNumber,places.rating,places.userRatingCount,places.location,places.types,places.reviews',
+        'X-Goog-FieldMask': fieldMask,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(reqBody),
       signal: AbortSignal.timeout(12000),
     });
 
     const data: any = await response.json().catch(() => ({}));
+    return { response, data };
+  };
 
-    if (!response.ok) {
-      const apiErr = data?.error || {};
+  try {
+    const collected: ProxyPlace[] = [];
+    const seenIds = new Set<string>();
+
+    const appendPlaces = (rawList: any[]) => {
+      for (const raw of rawList) {
+        if (!raw?.id || seenIds.has(raw.id)) continue;
+        seenIds.add(raw.id);
+        collected.push(mapRawPlace(raw));
+        if (collected.length >= targetLimit) break;
+      }
+    };
+
+    const baseRequest: Record<string, unknown> = {
+      textQuery,
+      pageSize: Math.min(20, targetLimit),
+    };
+    if (typeof input.minRating === 'number' && input.minRating > 0) {
+      baseRequest.minRating = input.minRating;
+    }
+
+    // 1. Primary query + nextPageToken pagination (up to 3 pages = 60 results)
+    const firstPage = await fetchSearchPage(baseRequest);
+    if (!firstPage.response.ok) {
+      const apiErr = firstPage.data?.error || {};
       return {
         ok: false,
-        status: response.status,
-        errorCode: apiErr.status || `HTTP_${response.status}`,
+        status: firstPage.response.status,
+        errorCode: apiErr.status || `HTTP_${firstPage.response.status}`,
         errorMessage:
-          apiErr.message || `Places API (New) returned status ${response.status}.`,
+          apiErr.message ||
+          `Places API (New) returned status ${firstPage.response.status}.`,
       };
     }
 
-    const places = (data.places || []).map((p: any) => ({
-      id: p.id,
-      displayName: p.displayName?.text || 'Business',
-      formattedAddress: p.formattedAddress,
-      googleMapsURI: p.googleMapsUri,
-      websiteURI: p.websiteUri,
-      nationalPhoneNumber: p.nationalPhoneNumber,
-      rating: typeof p.rating === 'number' ? p.rating : undefined,
-      userRatingCount:
-        typeof p.userRatingCount === 'number' ? p.userRatingCount : undefined,
-      location:
-        typeof p.location?.latitude === 'number' &&
-        typeof p.location?.longitude === 'number'
-          ? { lat: p.location.latitude, lng: p.location.longitude }
-          : undefined,
-      types: Array.isArray(p.types) ? p.types : [],
-      reviews: Array.isArray(p.reviews)
-        ? p.reviews.slice(0, 5).map((r: any) => ({
-            authorName: r.authorAttribution?.displayName || 'Google Reviewer',
-            rating: typeof r.rating === 'number' ? r.rating : undefined,
-            relativePublishTime: r.relativePublishTimeDescription,
-            publishTime: r.publishTime,
-            text: typeof r.text === 'string' ? r.text : r.text?.text,
-          }))
-        : [],
-    }));
+    appendPlaces(firstPage.data?.places || []);
+
+    let nextPageToken: string | undefined = firstPage.data?.nextPageToken;
+    let pageCount = 1;
+    while (nextPageToken && collected.length < targetLimit && pageCount < 3) {
+      pageCount += 1;
+      // Google Places API needs a short moment before nextPageToken activates
+      await new Promise((r) => setTimeout(r, 900));
+
+      let pageRes = await fetchSearchPage({
+        ...baseRequest,
+        pageSize: Math.min(20, targetLimit - collected.length),
+        pageToken: nextPageToken,
+      });
+
+      if (!pageRes.response.ok && pageRes.response.status === 400) {
+        await new Promise((r) => setTimeout(r, 1200));
+        pageRes = await fetchSearchPage({
+          ...baseRequest,
+          pageSize: Math.min(20, targetLimit - collected.length),
+          pageToken: nextPageToken,
+        });
+      }
+
+      if (!pageRes.response.ok) break;
+      appendPlaces(pageRes.data?.places || []);
+      nextPageToken = pageRes.data?.nextPageToken;
+    }
+
+    // 2. If targetLimit > 60 (e.g. 100) and we have coordinates, sweep city quadrant bias circles
+    if (collected.length < targetLimit) {
+      const coords = collected.filter((p) => p.location).map((p) => p.location!);
+      if (coords.length > 0) {
+        const avgLat = coords.reduce((acc, c) => acc + c.lat, 0) / coords.length;
+        const avgLng = coords.reduce((acc, c) => acc + c.lng, 0) / coords.length;
+
+        // Offsets (~5-7km around city center) to uncover additional businesses beyond Google's 60-item single-query cap
+        const offsets = [
+          { dLat: 0, dLng: 0 },
+          { dLat: 0.055, dLng: 0 },
+          { dLat: -0.055, dLng: 0 },
+          { dLat: 0, dLng: 0.065 },
+          { dLat: 0, dLng: -0.065 },
+          { dLat: 0.045, dLng: 0.055 },
+          { dLat: 0.045, dLng: -0.055 },
+          { dLat: -0.045, dLng: 0.055 },
+          { dLat: -0.045, dLng: -0.055 },
+        ];
+
+        for (const offset of offsets) {
+          if (collected.length >= targetLimit) break;
+          const zoneReq: Record<string, unknown> = {
+            textQuery,
+            pageSize: 20,
+            rankPreference: 'DISTANCE',
+            locationBias: {
+              circle: {
+                center: {
+                  latitude: avgLat + offset.dLat,
+                  longitude: avgLng + offset.dLng,
+                },
+                radius: 6500,
+              },
+            },
+          };
+          if (typeof input.minRating === 'number' && input.minRating > 0) {
+            zoneReq.minRating = input.minRating;
+          }
+
+          const zoneRes = await fetchSearchPage(zoneReq);
+          if (zoneRes.response.ok) {
+            appendPlaces(zoneRes.data?.places || []);
+          }
+        }
+      }
+    }
 
     return {
       ok: true,
       status: 200,
-      places,
+      places: collected.slice(0, targetLimit),
     };
   } catch (err) {
     return {
@@ -1123,4 +1223,5 @@ export async function searchPlacesTextProxy(
     };
   }
 }
+
 

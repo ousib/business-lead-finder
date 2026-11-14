@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { APIProvider, useMapsLibrary } from '@vis.gl/react-google-maps';
 import {
   Header,
@@ -23,18 +23,22 @@ import {
   ContactStatus,
 } from './types';
 import {
-  MapPin,
-  Utensils,
+  computeLeadOpportunity,
+  LeadOpportunityAnalysis,
+} from './utils/leadScoring';
+import {
   Search,
   AlertCircle,
-  HelpCircle,
   ShieldCheck,
   ExternalLink,
   Layers,
   LayoutGrid,
   Map as MapIcon,
-  Sparkles,
   Briefcase,
+  Flame,
+  Instagram,
+  Mail,
+  ArrowUpDown,
 } from 'lucide-react';
 
 const GOOGLE_MAPS_API_KEY =
@@ -82,7 +86,7 @@ const SearchEngine: React.FC<{
       state: 'Texas',
       cuisine: 'All Restaurants',
       minRating: 0,
-      maxResults: 10,
+      maxResults: 100,
     };
   });
 
@@ -105,8 +109,10 @@ const SearchEngine: React.FC<{
   });
   const [searchError, setSearchError] = useState<string | null>(null);
 
-  // Layout view mode
+  // Layout view mode & opportunity ranking/filtering
   const [viewMode, setViewMode] = useState<'split' | 'grid' | 'map'>('split');
+  const [sortBy, setSortBy] = useState<'lead_score' | 'reviews' | 'reputation_sensitive' | 'relevance'>('lead_score');
+  const [opportunityFilter, setOpportunityFilter] = useState<'all' | 'high_potential' | 'has_instagram' | 'has_email'>('all');
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | undefined>(() => {
     try {
       const saved = sessionStorage.getItem('replynation_search_places');
@@ -150,6 +156,66 @@ const SearchEngine: React.FC<{
     return map;
   }, [prospects]);
 
+  // Compute real-time Lead Score & sales-opportunity signals for all discovered places
+  const leadAnalysisMap = useMemo(() => {
+    const map: Record<string, LeadOpportunityAnalysis> = {};
+    places.forEach((place) => {
+      map[place.id] = computeLeadOpportunity(place, prospectsMap[place.id]);
+    });
+    return map;
+  }, [places, prospectsMap]);
+
+  const opportunityCounts = useMemo(() => {
+    let highPotential = 0;
+    let hasInstagram = 0;
+    let hasEmail = 0;
+    places.forEach((place) => {
+      const analysis = leadAnalysisMap[place.id];
+      if (!analysis) return;
+      if (analysis.tier === 'HIGH_POTENTIAL') highPotential++;
+      if (analysis.signals.hasInstagram) hasInstagram++;
+      if (analysis.signals.hasEmail) hasEmail++;
+    });
+    return { highPotential, hasInstagram, hasEmail };
+  }, [places, leadAnalysisMap]);
+
+  const displayedPlaces = useMemo(() => {
+    const filtered = places.filter((place) => {
+      const analysis = leadAnalysisMap[place.id];
+      if (!analysis) return true;
+      if (opportunityFilter === 'high_potential') return analysis.tier === 'HIGH_POTENTIAL';
+      if (opportunityFilter === 'has_instagram') return analysis.signals.hasInstagram;
+      if (opportunityFilter === 'has_email') return analysis.signals.hasEmail;
+      return true;
+    });
+
+    if (sortBy === 'relevance') return filtered;
+
+    return [...filtered].sort((a, b) => {
+      const aAnalysis = leadAnalysisMap[a.id];
+      const bAnalysis = leadAnalysisMap[b.id];
+
+      if (sortBy === 'lead_score') {
+        const scoreDiff = (bAnalysis?.leadScore ?? 0) - (aAnalysis?.leadScore ?? 0);
+        if (scoreDiff !== 0) return scoreDiff;
+        return (b.userRatingCount ?? 0) - (a.userRatingCount ?? 0);
+      }
+
+      if (sortBy === 'reviews') {
+        return (b.userRatingCount ?? 0) - (a.userRatingCount ?? 0);
+      }
+
+      if (sortBy === 'reputation_sensitive') {
+        const aSweet = a.rating && a.rating >= 3.5 && a.rating <= 4.5 ? 1 : 0;
+        const bSweet = b.rating && b.rating >= 3.5 && b.rating <= 4.5 ? 1 : 0;
+        if (bSweet !== aSweet) return bSweet - aSweet;
+        return (b.userRatingCount ?? 0) - (a.userRatingCount ?? 0);
+      }
+
+      return 0;
+    });
+  }, [places, leadAnalysisMap, opportunityFilter, sortBy]);
+
   // Execute Search using modern Places API (New) Place.searchByText
   const handleExecuteSearch = useCallback(async () => {
     if (!filters.city.trim()) return;
@@ -157,44 +223,131 @@ const SearchEngine: React.FC<{
     setIsLoading(true);
     setSearchError(null);
     setHasSearched(true);
+    setOpportunityFilter('all');
 
     try {
       // Build query string across all supported industries (e.g. "Marketing Agencies in Austin, Texas")
       const textQuery = buildPlaceSearchQuery(filters);
+      const targetLimit = Math.min(Math.max(filters.maxResults || 10, 1), 100);
 
       let rawResults: any[] = [];
       let clientSearchError: any = null;
+      let proxyResult: any = null;
 
-      if (placesLib && GOOGLE_MAPS_API_KEY) {
+      // For > 20 results, try server-side /api/places-search first because REST supports nextPageToken (up to 60) + quadrant sweeps (up to 100)
+      if (targetLimit > 20) {
         try {
-          const request: any = {
-            textQuery,
-            fields: [
-              'id',
-              'displayName',
-              'formattedAddress',
-              'googleMapsURI',
-              'websiteURI',
-              'nationalPhoneNumber',
-              'rating',
-              'userRatingCount',
-              'location',
-              'types',
-              'reviews',
-            ],
-            isOpenNow: false,
-            maxResultCount: filters.maxResults,
-            internalUsageAttributionIds: ['gmp_mcp_codeassist_v1_aistudio'],
+          const proxyResponse = await fetch('/api/places-search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              textQuery,
+              minRating: filters.minRating,
+              maxResultCount: targetLimit,
+            }),
+          });
+          proxyResult = await proxyResponse.json().catch(() => null);
+          if (proxyResponse.ok && proxyResult?.ok) {
+            rawResults = proxyResult.places || [];
+          }
+        } catch {
+          // Fall back to client-side SDK multi-zone search below
+        }
+      }
+
+      const runBrowserSdkSearch = async (extraParams: Record<string, unknown> = {}) => {
+        const request: any = {
+          textQuery,
+          fields: [
+            'id',
+            'displayName',
+            'formattedAddress',
+            'googleMapsURI',
+            'websiteURI',
+            'nationalPhoneNumber',
+            'rating',
+            'userRatingCount',
+            'location',
+            'types',
+            'reviews',
+          ],
+          isOpenNow: false,
+          maxResultCount: Math.min(targetLimit, 20),
+          internalUsageAttributionIds: ['gmp_mcp_codeassist_v1_aistudio'],
+          ...extraParams,
+        };
+
+        if (filters.minRating > 0) {
+          request.minRating = filters.minRating;
+        }
+
+        const { places: searchResults } =
+          await google.maps.places.Place.searchByText(request);
+        return searchResults || [];
+      };
+
+      // Use client-side SDK when targetLimit <= 20, or as fallback when server proxy wasn't authorized (e.g. HTTP referrer-locked key)
+      if (rawResults.length === 0 && placesLib && GOOGLE_MAPS_API_KEY) {
+        try {
+          const seenIds = new Set<string>();
+          const collected: any[] = [];
+          const appendUnique = (items: any[]) => {
+            for (const item of items) {
+              if (!item?.id || seenIds.has(item.id)) continue;
+              seenIds.add(item.id);
+              collected.push(item);
+              if (collected.length >= targetLimit) break;
+            }
           };
 
-          if (filters.minRating > 0) {
-            request.minRating = filters.minRating;
+          const initialBatch = await runBrowserSdkSearch();
+          appendUnique(initialBatch);
+
+          // If targetLimit > 20 and client SDK fallback was used, sweep surrounding city zones by distance
+          if (targetLimit > 20 && collected.length < targetLimit) {
+            const coords = collected
+              .map((p: any) => {
+                if (!p.location) return null;
+                const lat = typeof p.location.lat === 'function' ? p.location.lat() : p.location.lat;
+                const lng = typeof p.location.lng === 'function' ? p.location.lng() : p.location.lng;
+                return typeof lat === 'number' && typeof lng === 'number' ? { lat, lng } : null;
+              })
+              .filter(Boolean) as Array<{ lat: number; lng: number }>;
+
+            if (coords.length > 0) {
+              const avgLat = coords.reduce((sum, c) => sum + c.lat, 0) / coords.length;
+              const avgLng = coords.reduce((sum, c) => sum + c.lng, 0) / coords.length;
+
+              const offsets = [
+                { dLat: 0, dLng: 0 },
+                { dLat: 0.055, dLng: 0 },
+                { dLat: -0.055, dLng: 0 },
+                { dLat: 0, dLng: 0.065 },
+                { dLat: 0, dLng: -0.065 },
+                { dLat: 0.045, dLng: 0.055 },
+                { dLat: 0.045, dLng: -0.055 },
+                { dLat: -0.045, dLng: 0.055 },
+                { dLat: -0.045, dLng: -0.055 },
+              ];
+
+              for (const offset of offsets) {
+                if (collected.length >= targetLimit) break;
+                const zoneBatch = await runBrowserSdkSearch({
+                  rankPreference: 'DISTANCE',
+                  locationBias: {
+                    center: {
+                      lat: avgLat + offset.dLat,
+                      lng: avgLng + offset.dLng,
+                    },
+                    radius: 6500,
+                  },
+                });
+                appendUnique(zoneBatch);
+              }
+            }
           }
 
-          // Call modern Place.searchByText
-          const { places: searchResults } =
-            await google.maps.places.Place.searchByText(request);
-          rawResults = searchResults || [];
+          rawResults = collected.slice(0, targetLimit);
         } catch (sdkErr: any) {
           clientSearchError = sdkErr;
           const sdkMsg = sdkErr?.message || String(sdkErr);
@@ -211,24 +364,27 @@ const SearchEngine: React.FC<{
       }
 
       // Automatic fallback to server-side /api/places-search proxy if SDK wasn't ready or hit permission/referrer restrictions
-      if (clientSearchError || !placesLib || !GOOGLE_MAPS_API_KEY) {
-        const proxyResponse = await fetch('/api/places-search', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            textQuery,
-            minRating: filters.minRating,
-            maxResultCount: filters.maxResults,
-          }),
-        });
+      if (rawResults.length === 0 && (clientSearchError || !placesLib || !GOOGLE_MAPS_API_KEY)) {
+        if (!proxyResult) {
+          const proxyResponse = await fetch('/api/places-search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              textQuery,
+              minRating: filters.minRating,
+              maxResultCount: targetLimit,
+            }),
+          });
+          proxyResult = await proxyResponse.json().catch(() => null);
+          if (proxyResponse.ok && proxyResult?.ok) {
+            rawResults = proxyResult.places || [];
+          }
+        }
 
-        const proxyData = await proxyResponse.json().catch(() => null);
-        if (proxyResponse.ok && proxyData?.ok) {
-          rawResults = proxyData.places || [];
-        } else {
+        if (rawResults.length === 0 && !proxyResult?.ok) {
           // Preserve original client SDK error message when available, paired with proxy context
-          const proxyErrText = proxyData?.errorMessage
-            ? `${proxyData.errorCode ? `${proxyData.errorCode}: ` : ''}${proxyData.errorMessage}`
+          const proxyErrText = proxyResult?.errorMessage
+            ? `${proxyResult.errorCode ? `${proxyResult.errorCode}: ` : ''}${proxyResult.errorMessage}`
             : '';
           const primaryMsg =
             clientSearchError?.message ||
@@ -393,7 +549,7 @@ const SearchEngine: React.FC<{
         onQuotaExceeded();
         setSearchError('Google Maps Platform daily quota reached for this API key.');
       } else {
-        setSearchError(errMsg || 'An unexpected error occurred while searching for restaurants.');
+        setSearchError(errMsg || 'An unexpected error occurred while searching for businesses.');
       }
       setPlaces([]);
     } finally {
@@ -434,55 +590,132 @@ const SearchEngine: React.FC<{
             isLoading={isLoading}
           />
 
-          {/* Results Header & View Toggle */}
+          {/* Results Header, Opportunity Filters, Sort & View Toggle */}
           {hasSearched && (
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold text-white tracking-tight">
-                  Search Results
-                </h2>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 font-mono">
-                  {places.length} found
-                </span>
-                <span className="text-xs text-slate-400 hidden sm:inline">
-                  in {filters.city}, {filters.state}
-                </span>
+            <div className="space-y-3 pt-2">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-white tracking-tight">
+                    Prospect Results
+                  </h2>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 font-mono">
+                    {displayedPlaces.length === places.length
+                      ? `${places.length} found`
+                      : `${displayedPlaces.length} / ${places.length}`}
+                  </span>
+                  <span className="text-xs text-slate-400 hidden sm:inline">
+                    in {filters.city}, {filters.state}
+                  </span>
+                </div>
+
+                {places.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    {/* Sort Selector */}
+                    <div className="flex items-center gap-1.5 bg-slate-800/80 px-2.5 py-1.5 rounded-xl border border-slate-700 text-xs">
+                      <ArrowUpDown className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      <span className="text-slate-400 hidden md:inline">Sort:</span>
+                      <select
+                        value={sortBy}
+                        onChange={(e) => setSortBy(e.target.value as any)}
+                        aria-label="Sort prospects"
+                        className="bg-transparent text-slate-100 font-semibold focus:outline-none cursor-pointer"
+                      >
+                        <option value="lead_score" className="bg-slate-900">Highest Lead Score</option>
+                        <option value="reviews" className="bg-slate-900">Most Reviews</option>
+                        <option value="reputation_sensitive" className="bg-slate-900">Reputation-Sensitive (3.5–4.5★)</option>
+                        <option value="relevance" className="bg-slate-900">Google Relevance</option>
+                      </select>
+                    </div>
+
+                    {/* View Toggle */}
+                    <div className="flex items-center bg-slate-800/80 p-1 rounded-xl border border-slate-700">
+                      <button
+                        onClick={() => setViewMode('split')}
+                        className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg transition-all ${
+                          viewMode === 'split'
+                            ? 'bg-slate-700 text-white shadow-sm'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <Layers className="w-3.5 h-3.5" />
+                        <span>Split View</span>
+                      </button>
+                      <button
+                        onClick={() => setViewMode('grid')}
+                        className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg transition-all ${
+                          viewMode === 'grid'
+                            ? 'bg-slate-700 text-white shadow-sm'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <LayoutGrid className="w-3.5 h-3.5" />
+                        <span>Cards Only</span>
+                      </button>
+                      <button
+                        onClick={() => setViewMode('map')}
+                        className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg transition-all ${
+                          viewMode === 'map'
+                            ? 'bg-slate-700 text-white shadow-sm'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <MapIcon className="w-3.5 h-3.5" />
+                        <span>Map View</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {places.length > 0 && (
-                <div className="flex items-center bg-slate-800/80 p-1 rounded-xl border border-slate-700">
+              {/* Quick Opportunity Signal Filters */}
+              {!isLoading && places.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
                   <button
-                    onClick={() => setViewMode('split')}
-                    className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg transition-all ${
-                      viewMode === 'split'
-                        ? 'bg-slate-700 text-white shadow-sm'
-                        : 'text-slate-400 hover:text-slate-200'
+                    type="button"
+                    onClick={() => setOpportunityFilter('all')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
+                      opportunityFilter === 'all'
+                        ? 'bg-slate-700 text-white border-slate-500'
+                        : 'bg-slate-800/60 text-slate-400 border-slate-700/80 hover:text-slate-200'
                     }`}
                   >
-                    <Layers className="w-3.5 h-3.5" />
-                    <span>Split View</span>
+                    All Leads ({places.length})
                   </button>
                   <button
-                    onClick={() => setViewMode('grid')}
-                    className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg transition-all ${
-                      viewMode === 'grid'
-                        ? 'bg-slate-700 text-white shadow-sm'
-                        : 'text-slate-400 hover:text-slate-200'
+                    type="button"
+                    onClick={() => setOpportunityFilter('high_potential')}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
+                      opportunityFilter === 'high_potential'
+                        ? 'bg-amber-500/20 text-amber-200 border-amber-400/60'
+                        : 'bg-slate-800/60 text-amber-300/80 border-slate-700/80 hover:border-amber-500/40'
                     }`}
                   >
-                    <LayoutGrid className="w-3.5 h-3.5" />
-                    <span>Cards Only</span>
+                    <Flame className="w-3.5 h-3.5 text-amber-400" />
+                    <span>High-Potential ({opportunityCounts.highPotential})</span>
                   </button>
                   <button
-                    onClick={() => setViewMode('map')}
-                    className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg transition-all ${
-                      viewMode === 'map'
-                        ? 'bg-slate-700 text-white shadow-sm'
-                        : 'text-slate-400 hover:text-slate-200'
+                    type="button"
+                    onClick={() => setOpportunityFilter('has_instagram')}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
+                      opportunityFilter === 'has_instagram'
+                        ? 'bg-pink-500/20 text-pink-200 border-pink-400/60'
+                        : 'bg-slate-800/60 text-pink-300/80 border-slate-700/80 hover:border-pink-500/40'
                     }`}
                   >
-                    <MapIcon className="w-3.5 h-3.5" />
-                    <span>Map View</span>
+                    <Instagram className="w-3.5 h-3.5 text-pink-400" />
+                    <span>Instagram Found ({opportunityCounts.hasInstagram})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOpportunityFilter('has_email')}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
+                      opportunityFilter === 'has_email'
+                        ? 'bg-indigo-500/20 text-indigo-200 border-indigo-400/60'
+                        : 'bg-slate-800/60 text-indigo-300/80 border-slate-700/80 hover:border-indigo-500/40'
+                    }`}
+                  >
+                    <Mail className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Business Email Found ({opportunityCounts.hasEmail})</span>
                   </button>
                 </div>
               )}
@@ -617,14 +850,31 @@ const SearchEngine: React.FC<{
           )}
 
           {/* Results Display */}
-          {!isLoading && places.length > 0 && (
+          {!isLoading && places.length > 0 && displayedPlaces.length === 0 && (
+            <div className="text-center py-10 bg-slate-800/40 border border-slate-800 rounded-2xl p-6 max-w-lg mx-auto space-y-3">
+              <Flame className="w-8 h-8 text-amber-400/70 mx-auto" />
+              <h3 className="text-sm font-bold text-white">No prospects match this quick filter</h3>
+              <p className="text-xs text-slate-400">
+                Try switching back to All Leads to see all {places.length} discovered businesses.
+              </p>
+              <button
+                type="button"
+                onClick={() => setOpportunityFilter('all')}
+                className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold cursor-pointer transition-colors"
+              >
+                Show All {places.length} Prospects
+              </button>
+            </div>
+          )}
+
+          {!isLoading && displayedPlaces.length > 0 && (
             <div>
               {/* Split View */}
               {viewMode === 'split' && (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
                   {/* Left Column: Cards List */}
                   <div className="lg:col-span-7 space-y-4 max-h-[700px] overflow-y-auto pr-1">
-                    {places.map((place) => (
+                    {displayedPlaces.map((place) => (
                       <RestaurantCard
                         key={place.id}
                         place={place}
@@ -639,7 +889,7 @@ const SearchEngine: React.FC<{
                   {/* Right Column: Sticky Map */}
                   <div className="lg:col-span-5 sticky top-20">
                     <MapView
-                      places={places}
+                      places={displayedPlaces}
                       selectedPlaceId={selectedPlaceId}
                       onSelectPlace={(p) => setSelectedPlaceId(p.id)}
                       onInspectPlace={(p) => setInspectingPlace(p)}
@@ -652,7 +902,7 @@ const SearchEngine: React.FC<{
               {/* Grid Only */}
               {viewMode === 'grid' && (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                  {places.map((place) => (
+                  {displayedPlaces.map((place) => (
                     <RestaurantCard
                       key={place.id}
                       place={place}
@@ -668,7 +918,7 @@ const SearchEngine: React.FC<{
               {/* Map Only */}
               {viewMode === 'map' && (
                 <MapView
-                  places={places}
+                  places={displayedPlaces}
                   selectedPlaceId={selectedPlaceId}
                   onSelectPlace={(p) => setSelectedPlaceId(p.id)}
                   onInspectPlace={(p) => setInspectingPlace(p)}

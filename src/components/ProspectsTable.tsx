@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Search,
   Filter,
@@ -6,9 +6,6 @@ import {
   Trash2,
   Edit3,
   Star,
-  CheckCircle,
-  AlertTriangle,
-  HelpCircle,
   Mail,
   Phone,
   Globe,
@@ -17,8 +14,11 @@ import {
   Instagram,
   Facebook,
   Share2,
+  Flame,
+  ArrowUpDown,
 } from 'lucide-react';
-import { ProspectResearch, OpportunityLevel, ContactStatus } from '../types';
+import { ProspectResearch, ContactStatus } from '../types';
+import { computeLeadOpportunity } from '../utils/leadScoring';
 
 interface ProspectsTableProps {
   prospects: ProspectResearch[];
@@ -39,31 +39,63 @@ export const ProspectsTable: React.FC<ProspectsTableProps> = ({
   const [opportunityFilter, setOpportunityFilter] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [socialFilter, setSocialFilter] = useState<string>('ALL');
+  const [sortBy, setSortBy] = useState<'lead_score' | 'recent'>('lead_score');
 
-  const filteredProspects = prospects.filter((p) => {
-    const matchesSearch =
-      p.businessName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.city.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (p.instagramHandle && p.instagramHandle.toLowerCase().includes(searchTerm.toLowerCase()));
+  const prospectAnalysisMap = useMemo(() => {
+    const map: Record<string, ReturnType<typeof computeLeadOpportunity>> = {};
+    prospects.forEach((p) => {
+      map[p.placeId] = computeLeadOpportunity(
+        {
+          displayName: p.businessName,
+          city: p.city,
+          state: p.state,
+          rating: p.rating,
+          userRatingCount: p.userRatingCount,
+          websiteUri: p.websiteUri,
+          nationalPhoneNumber: p.nationalPhoneNumber,
+          socials: p.socials,
+        },
+        p
+      );
+    });
+    return map;
+  }, [prospects]);
 
-    const matchesOpp =
-      opportunityFilter === 'ALL' || p.opportunityLevel === opportunityFilter;
+  const filteredProspects = useMemo(() => {
+    const filtered = prospects.filter((p) => {
+      const matchesSearch =
+        p.businessName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        p.city.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        p.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (p.instagramHandle && p.instagramHandle.toLowerCase().includes(searchTerm.toLowerCase()));
 
-    const matchesStatus =
-      statusFilter === 'ALL' || p.contactStatus === statusFilter;
+      const matchesOpp =
+        opportunityFilter === 'ALL' || p.opportunityLevel === opportunityFilter;
 
-    const hasInstagram = Boolean(p.instagramUrl || p.instagramHandle || p.socials?.instagram);
-    const matchesSocial =
-      socialFilter === 'ALL' ||
-      (socialFilter === 'WITH_INSTAGRAM' && hasInstagram) ||
-      (socialFilter === 'NO_INSTAGRAM' && !hasInstagram);
+      const matchesStatus =
+        statusFilter === 'ALL' || p.contactStatus === statusFilter;
 
-    return matchesSearch && matchesOpp && matchesStatus && matchesSocial;
-  });
+      const hasInstagram = Boolean(p.instagramUrl || p.instagramHandle || p.socials?.instagram);
+      const matchesSocial =
+        socialFilter === 'ALL' ||
+        (socialFilter === 'WITH_INSTAGRAM' && hasInstagram) ||
+        (socialFilter === 'NO_INSTAGRAM' && !hasInstagram);
 
-  const highCount = prospects.filter((p) => p.opportunityLevel === 'HIGH').length;
-  const mediumCount = prospects.filter((p) => p.opportunityLevel === 'MEDIUM').length;
+      return matchesSearch && matchesOpp && matchesStatus && matchesSocial;
+    });
+
+    if (sortBy === 'recent') return filtered;
+
+    return [...filtered].sort((a, b) => {
+      const aScore = prospectAnalysisMap[a.placeId]?.leadScore ?? 0;
+      const bScore = prospectAnalysisMap[b.placeId]?.leadScore ?? 0;
+      return bScore - aScore;
+    });
+  }, [prospects, searchTerm, opportunityFilter, statusFilter, socialFilter, sortBy, prospectAnalysisMap]);
+
+  const highCount = prospects.filter(
+    (p) => p.opportunityLevel === 'HIGH' || prospectAnalysisMap[p.placeId]?.tier === 'HIGH_POTENTIAL'
+  ).length;
   const totalUnanswered = prospects.reduce(
     (acc, p) => acc + (p.unansweredNegativeCount || 0),
     0
@@ -178,6 +210,19 @@ export const ProspectsTable: React.FC<ProspectsTableProps> = ({
             </select>
           </div>
 
+          {/* Sort Filter */}
+          <div className="flex items-center gap-1.5 text-xs text-slate-300">
+            <ArrowUpDown className="w-3.5 h-3.5 text-emerald-400" />
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as 'lead_score' | 'recent')}
+              className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+            >
+              <option value="lead_score">Sort: Lead Score</option>
+              <option value="recent">Sort: Saved Order</option>
+            </select>
+          </div>
+
           <button
             onClick={onOpenExport}
             disabled={prospects.length === 0}
@@ -271,25 +316,47 @@ export const ProspectsTable: React.FC<ProspectsTableProps> = ({
                         )}
                       </td>
 
-                      {/* Opportunity Level */}
-                      <td className="py-3.5 px-3">
+                      {/* Opportunity Level & Lead Score */}
+                      <td className="py-3.5 px-3 space-y-1.5">
+                        {(() => {
+                          const analysis = prospectAnalysisMap[p.placeId];
+                          const score = analysis?.leadScore ?? 0;
+                          return (
+                            <div className="flex items-center gap-1.5">
+                              {analysis?.tier === 'HIGH_POTENTIAL' && (
+                                <Flame className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                              )}
+                              <span
+                                className={`font-mono font-bold text-xs ${
+                                  score >= 72
+                                    ? 'text-amber-300'
+                                    : score >= 50
+                                    ? 'text-emerald-300'
+                                    : 'text-slate-300'
+                                }`}
+                              >
+                                {score}/100
+                              </span>
+                            </div>
+                          );
+                        })()}
                         {p.opportunityLevel === 'HIGH' && (
-                          <span className="inline-block px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                          <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
                             HIGH
                           </span>
                         )}
                         {p.opportunityLevel === 'MEDIUM' && (
-                          <span className="inline-block px-2 py-0.5 rounded text-[11px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                          <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
                             MEDIUM
                           </span>
                         )}
                         {p.opportunityLevel === 'LOW' && (
-                          <span className="inline-block px-2 py-0.5 rounded text-[11px] font-medium bg-slate-700 text-slate-300 border border-slate-600">
+                          <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-slate-700 text-slate-300 border border-slate-600">
                             LOW
                           </span>
                         )}
                         {p.opportunityLevel === 'UNVERIFIED' && (
-                          <span className="inline-block px-2 py-0.5 rounded text-[11px] font-medium bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                          <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-purple-500/20 text-purple-300 border border-purple-500/30">
                             UNVERIFIED
                           </span>
                         )}

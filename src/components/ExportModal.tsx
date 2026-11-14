@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { X, Download, ShieldCheck, AlertCircle, FileSpreadsheet, Check } from 'lucide-react';
+import { X, Download, ShieldCheck, FileSpreadsheet, Check } from 'lucide-react';
 import { ProspectResearch } from '../types';
+import { computeLeadOpportunity } from '../utils/leadScoring';
 
 interface ExportModalProps {
   prospects: ProspectResearch[];
@@ -59,6 +60,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({ prospects, onClose }) 
       'Negative With Owner Replies',
       'Verified Unanswered Negative Reviews',
       'Opportunity Rating',
+      'Lead Score (0-100)',
+      'Prospect Tier',
       'Opportunity Rationale',
       'Evidence Notes',
       'Contact Status',
@@ -66,34 +69,52 @@ export const ExportModal: React.FC<ExportModalProps> = ({ prospects, onClose }) 
       'Verification Status',
     ];
 
-    const rows = prospects.map((p) => [
-      sanitizeCsvCell(p.businessName),
-      sanitizeCsvCell(p.city),
-      sanitizeCsvCell(p.state),
-      sanitizeCsvCell(p.category),
-      sanitizeCsvCell(p.websiteUri || 'N/A'),
-      sanitizeCsvCell(p.instagramHandle || p.socials?.instagramHandle || 'N/A'),
-      sanitizeCsvCell(p.instagramUrl || p.socials?.instagram || 'N/A'),
-      sanitizeCsvCell(p.facebookUrl || p.socials?.facebook || 'N/A'),
-      sanitizeCsvCell(p.tiktokUrl || p.socials?.tiktok || 'N/A'),
-      sanitizeCsvCell(p.socials?.source || 'unscanned'),
-      sanitizeCsvCell(p.nationalPhoneNumber || 'N/A'),
-      sanitizeCsvCell(p.googleMapsUri),
-      sanitizeCsvCell(p.placeId),
-      sanitizeCsvCell(p.rating !== undefined ? p.rating.toString() : 'N/A'),
-      sanitizeCsvCell(p.userRatingCount !== undefined ? p.userRatingCount.toString() : 'N/A'),
-      sanitizeCsvCell(p.dateInspected),
-      sanitizeCsvCell(p.reviewsInspectedCount),
-      sanitizeCsvCell(p.negativeReviewsCount),
-      sanitizeCsvCell(p.negativeWithRepliesCount),
-      sanitizeCsvCell(p.unansweredNegativeCount),
-      sanitizeCsvCell(p.opportunityLevel),
-      sanitizeCsvCell(p.opportunityRationale),
-      sanitizeCsvCell(p.inspectionNotes || 'None'),
-      sanitizeCsvCell(p.contactStatus),
-      sanitizeCsvCell(p.contactEmail || 'N/A'),
-      sanitizeCsvCell(p.verificationStatus),
-    ]);
+    const rows = prospects.map((p) => {
+      const analysis = computeLeadOpportunity(
+        {
+          displayName: p.businessName,
+          city: p.city,
+          state: p.state,
+          rating: p.rating,
+          userRatingCount: p.userRatingCount,
+          websiteUri: p.websiteUri,
+          nationalPhoneNumber: p.nationalPhoneNumber,
+          socials: p.socials,
+        },
+        p
+      );
+
+      return [
+        sanitizeCsvCell(p.businessName),
+        sanitizeCsvCell(p.city),
+        sanitizeCsvCell(p.state),
+        sanitizeCsvCell(p.category),
+        sanitizeCsvCell(p.websiteUri || 'N/A'),
+        sanitizeCsvCell(p.instagramHandle || p.socials?.instagramHandle || 'N/A'),
+        sanitizeCsvCell(p.instagramUrl || p.socials?.instagram || 'N/A'),
+        sanitizeCsvCell(p.facebookUrl || p.socials?.facebook || 'N/A'),
+        sanitizeCsvCell(p.tiktokUrl || p.socials?.tiktok || 'N/A'),
+        sanitizeCsvCell(p.socials?.source || 'unscanned'),
+        sanitizeCsvCell(p.nationalPhoneNumber || 'N/A'),
+        sanitizeCsvCell(p.googleMapsUri),
+        sanitizeCsvCell(p.placeId),
+        sanitizeCsvCell(p.rating !== undefined ? p.rating.toString() : 'N/A'),
+        sanitizeCsvCell(p.userRatingCount !== undefined ? p.userRatingCount.toString() : 'N/A'),
+        sanitizeCsvCell(p.dateInspected),
+        sanitizeCsvCell(p.reviewsInspectedCount),
+        sanitizeCsvCell(p.negativeReviewsCount),
+        sanitizeCsvCell(p.negativeWithRepliesCount),
+        sanitizeCsvCell(p.unansweredNegativeCount),
+        sanitizeCsvCell(p.opportunityLevel),
+        sanitizeCsvCell(analysis.leadScore),
+        sanitizeCsvCell(analysis.tierLabel),
+        sanitizeCsvCell(p.opportunityRationale),
+        sanitizeCsvCell(p.inspectionNotes || 'None'),
+        sanitizeCsvCell(p.contactStatus),
+        sanitizeCsvCell(p.contactEmail || 'N/A'),
+        sanitizeCsvCell(p.verificationStatus),
+      ];
+    });
 
     const csvContent =
       '\uFEFF' + // UTF-8 BOM for Excel compatibility

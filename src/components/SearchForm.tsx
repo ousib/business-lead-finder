@@ -659,12 +659,15 @@ export const SearchForm: React.FC<SearchFormProps> = ({
                 onChange={(e) =>
                   onChange({ ...filters, maxResults: parseInt(e.target.value, 10) })
                 }
-                className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500 cursor-pointer"
               >
                 <option value="5">5 results</option>
                 <option value="10">10 results</option>
                 <option value="15">15 results</option>
                 <option value="20">20 results</option>
+                <option value="40">40 results</option>
+                <option value="60">60 results</option>
+                <option value="100">100 results</option>
               </select>
             </div>
 
@@ -677,7 +680,11 @@ export const SearchForm: React.FC<SearchFormProps> = ({
               {isLoading ? (
                 <>
                   <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
-                  <span>Searching Places...</span>
+                  <span>
+                    {filters.maxResults > 20
+                      ? `Searching up to ${filters.maxResults}...`
+                      : 'Searching Places...'}
+                  </span>
                 </>
               ) : (
                 <>
