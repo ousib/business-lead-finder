@@ -592,8 +592,8 @@ const SearchEngine: React.FC<{
                   { industry: 'Cleaning Companies', city: 'Houston', state: 'Texas', cuisine: 'Commercial Janitorial' },
                   { industry: 'Lawyers', city: 'New York', state: 'New York', cuisine: 'Personal Injury' },
                   { industry: 'Salons', city: 'Los Angeles', state: 'California', cuisine: '' },
-                  { industry: 'Restaurants', city: 'Austin', state: 'Texas', cuisine: 'Texas Smoked Brisket' },
-                  { industry: 'Restaurants', city: 'Nashville', state: 'Tennessee', cuisine: 'Nashville Hot Chicken' },
+                  { industry: 'Restaurants', city: 'Austin', state: 'Texas', cuisine: 'Smoked Brisket' },
+                  { industry: 'Restaurants', city: 'Nashville', state: 'Tennessee', cuisine: 'Hot Chicken' },
                 ].map((preset, idx) => (
                   <button
                     key={idx}
