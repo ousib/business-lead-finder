@@ -83,6 +83,21 @@ export const InspectionModal: React.FC<InspectionModalProps> = ({
   const [discoveredSources, setDiscoveredSources] = useState<Array<{ title?: string; url: string }>>(
     initialSocials?.discoveredSources || []
   );
+  const [instagramConfidence, setInstagramConfidence] = useState<SocialProfiles['instagramConfidence']>(
+    initialSocials?.instagramConfidence
+  );
+  const [emailConfidence, setEmailConfidence] = useState<SocialProfiles['emailConfidence']>(
+    initialSocials?.emailConfidence
+  );
+  const [emailSource, setEmailSource] = useState<string | undefined>(
+    initialSocials?.emailSource
+  );
+  const [websiteReachable, setWebsiteReachable] = useState<boolean | undefined>(
+    initialSocials?.websiteReachable
+  );
+  const [websiteStatusCode, setWebsiteStatusCode] = useState<number | undefined>(
+    initialSocials?.websiteStatusCode
+  );
 
   // Contact discovery state
   const [contactEmail, setContactEmail] = useState<string>(
@@ -136,6 +151,9 @@ export const InspectionModal: React.FC<InspectionModalProps> = ({
         if (data.instagramHandle) {
           setInstagramHandle(data.instagramHandle);
         }
+        if (data.instagramConfidence) {
+          setInstagramConfidence(data.instagramConfidence);
+        }
         if (data.facebook) {
           setFacebookUrl(data.facebook);
         }
@@ -144,6 +162,12 @@ export const InspectionModal: React.FC<InspectionModalProps> = ({
         }
         if (data.websiteEmail && !contactEmail) {
           setContactEmail(data.websiteEmail);
+          setEmailConfidence(data.emailConfidence);
+          setEmailSource(data.emailSource);
+        }
+        if (typeof data.websiteReachable === 'boolean') {
+          setWebsiteReachable(data.websiteReachable);
+          setWebsiteStatusCode(data.websiteStatusCode);
         }
         if (data.discoveredSources) {
           setDiscoveredSources(data.discoveredSources);
@@ -251,9 +275,14 @@ export const InspectionModal: React.FC<InspectionModalProps> = ({
     const updatedSocials: SocialProfiles = {
       instagram: cleanIgUrl || undefined,
       instagramHandle: cleanHandle || undefined,
+      instagramConfidence: cleanIgUrl ? instagramConfidence || 'manual_entry' : undefined,
       facebook: facebookUrl.trim() || undefined,
       tiktok: tiktokUrl.trim() || undefined,
       websiteEmail: contactEmail.trim() || undefined,
+      emailSource: contactEmail.trim() ? emailSource || 'manual_entry' : undefined,
+      emailConfidence: contactEmail.trim() ? emailConfidence || 'unverified' : undefined,
+      websiteReachable,
+      websiteStatusCode,
       source: preservedAutoSources.includes(socialSource)
         ? socialSource
         : cleanIgUrl || facebookUrl || tiktokUrl
@@ -694,14 +723,34 @@ export const InspectionModal: React.FC<InspectionModalProps> = ({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                  Contact Email (Verified from site or entered)
+                <label className="block text-[11px] font-semibold text-slate-300 mb-1 flex items-center justify-between gap-2">
+                  <span>Contact Email</span>
+                  {contactEmail && emailConfidence && (
+                    <span
+                      className={`text-[9px] px-1.5 py-0.5 rounded border ${
+                        emailConfidence === 'verified_domain'
+                          ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                          : emailConfidence === 'site_listed'
+                          ? 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+                          : 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                      }`}
+                    >
+                      {emailConfidence === 'verified_domain'
+                        ? 'Domain Verified'
+                        : emailConfidence === 'site_listed'
+                        ? 'Site Listed'
+                        : 'Search Match'}
+                    </span>
+                  )}
                 </label>
                 <input
                   type="email"
-                  placeholder="e.g. manager@restaurant.com"
+                  placeholder="e.g. manager@business.com"
                   value={contactEmail}
-                  onChange={(e) => setContactEmail(e.target.value)}
+                  onChange={(e) => {
+                    setContactEmail(e.target.value);
+                    setEmailSource('manual_entry');
+                  }}
                   className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
                 />
               </div>

@@ -328,9 +328,9 @@ export const ProspectsTable: React.FC<ProspectsTableProps> = ({
                               )}
                               <span
                                 className={`font-mono font-bold text-xs ${
-                                  score >= 72
+                                  score >= 70
                                     ? 'text-amber-300'
-                                    : score >= 50
+                                    : score >= 46
                                     ? 'text-emerald-300'
                                     : 'text-slate-300'
                                 }`}
@@ -420,11 +420,34 @@ export const ProspectsTable: React.FC<ProspectsTableProps> = ({
                       </td>
 
                       {/* Contact Discovery */}
-                      <td className="py-3.5 px-3 max-w-[160px] space-y-0.5">
+                      <td className="py-3.5 px-3 max-w-[175px] space-y-1">
                         {p.contactEmail ? (
-                          <div className="flex items-center gap-1 text-[11px] text-indigo-300 truncate">
-                            <Mail className="w-3 h-3 shrink-0" />
-                            <span className="truncate">{p.contactEmail}</span>
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-1 text-[11px] text-indigo-300 truncate">
+                              <Mail className="w-3 h-3 shrink-0" />
+                              <span className="truncate">{p.contactEmail}</span>
+                            </div>
+                            {prospectAnalysisMap[p.placeId]?.emailConfidence && (
+                              <span
+                                className={`inline-block text-[9px] px-1.5 py-0.2 rounded border ${
+                                  prospectAnalysisMap[p.placeId]?.emailConfidence ===
+                                  'verified_domain'
+                                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                    : prospectAnalysisMap[p.placeId]?.emailConfidence ===
+                                      'site_listed'
+                                    ? 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+                                    : 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                }`}
+                              >
+                                {prospectAnalysisMap[p.placeId]?.emailConfidence ===
+                                'verified_domain'
+                                  ? 'Domain Verified'
+                                  : prospectAnalysisMap[p.placeId]?.emailConfidence ===
+                                    'site_listed'
+                                  ? 'Site Listed'
+                                  : 'Search Match'}
+                              </span>
+                            )}
                           </div>
                         ) : null}
                         {p.nationalPhoneNumber ? (

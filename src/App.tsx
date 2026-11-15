@@ -112,7 +112,7 @@ const SearchEngine: React.FC<{
   // Layout view mode & opportunity ranking/filtering
   const [viewMode, setViewMode] = useState<'split' | 'grid' | 'map'>('split');
   const [sortBy, setSortBy] = useState<'lead_score' | 'reviews' | 'reputation_sensitive' | 'relevance'>('lead_score');
-  const [opportunityFilter, setOpportunityFilter] = useState<'all' | 'high_potential' | 'has_instagram' | 'has_email'>('all');
+  const [opportunityFilter, setOpportunityFilter] = useState<'all' | 'high_potential' | 'verified_contact' | 'has_instagram' | 'has_email'>('all');
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | undefined>(() => {
     try {
       const saved = sessionStorage.getItem('replynation_search_places');
@@ -167,16 +167,24 @@ const SearchEngine: React.FC<{
 
   const opportunityCounts = useMemo(() => {
     let highPotential = 0;
+    let verifiedContact = 0;
     let hasInstagram = 0;
     let hasEmail = 0;
     places.forEach((place) => {
       const analysis = leadAnalysisMap[place.id];
       if (!analysis) return;
       if (analysis.tier === 'HIGH_POTENTIAL') highPotential++;
+      if (
+        analysis.emailConfidence === 'verified_domain' ||
+        analysis.emailConfidence === 'site_listed' ||
+        analysis.instagramConfidence === 'website_verified'
+      ) {
+        verifiedContact++;
+      }
       if (analysis.signals.hasInstagram) hasInstagram++;
       if (analysis.signals.hasEmail) hasEmail++;
     });
-    return { highPotential, hasInstagram, hasEmail };
+    return { highPotential, verifiedContact, hasInstagram, hasEmail };
   }, [places, leadAnalysisMap]);
 
   const displayedPlaces = useMemo(() => {
@@ -184,6 +192,13 @@ const SearchEngine: React.FC<{
       const analysis = leadAnalysisMap[place.id];
       if (!analysis) return true;
       if (opportunityFilter === 'high_potential') return analysis.tier === 'HIGH_POTENTIAL';
+      if (opportunityFilter === 'verified_contact') {
+        return (
+          analysis.emailConfidence === 'verified_domain' ||
+          analysis.emailConfidence === 'site_listed' ||
+          analysis.instagramConfidence === 'website_verified'
+        );
+      }
       if (opportunityFilter === 'has_instagram') return analysis.signals.hasInstagram;
       if (opportunityFilter === 'has_email') return analysis.signals.hasEmail;
       return true;
@@ -692,6 +707,18 @@ const SearchEngine: React.FC<{
                   >
                     <Flame className="w-3.5 h-3.5 text-amber-400" />
                     <span>High-Potential ({opportunityCounts.highPotential})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOpportunityFilter('verified_contact')}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
+                      opportunityFilter === 'verified_contact'
+                        ? 'bg-emerald-500/20 text-emerald-200 border-emerald-400/60'
+                        : 'bg-slate-800/60 text-emerald-300/80 border-slate-700/80 hover:border-emerald-500/40'
+                    }`}
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Site-Verified Contacts ({opportunityCounts.verifiedContact})</span>
                   </button>
                   <button
                     type="button"

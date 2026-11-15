@@ -27,11 +27,16 @@ export interface ClassificationResult {
 interface ExtractedSocials {
   instagram?: string;
   instagramHandle?: string;
+  instagramConfidence?: 'website_verified' | 'directory_verified' | 'search_match';
   facebook?: string;
   tiktok?: string;
   twitter?: string;
   youtube?: string;
   websiteEmail?: string;
+  emailSource?: string;
+  emailConfidence?: 'verified_domain' | 'site_listed' | 'external_match' | 'unverified';
+  websiteReachable?: boolean;
+  websiteStatusCode?: number;
 }
 
 let geminiQuotaCooldownUntil = 0;
@@ -115,6 +120,48 @@ const IG_IGNORED_PATHS = new Set([
   'oauth',
 ]);
 
+// Website builders, SaaS platforms, and review aggregators frequently embedded in footers
+const PLATFORM_SOCIAL_HANDLES = new Set([
+  'wix',
+  'wixstudio',
+  'squarespace',
+  'wordpress',
+  'wordpressdotcom',
+  'shopify',
+  'webflow',
+  'godaddy',
+  'framer',
+  'elementor',
+  'bentobox',
+  'getbentobox',
+  'popmenu',
+  'toasttab',
+  'spoton',
+  'chownow',
+  'clover',
+  'square',
+  'squareup',
+  'mindbody',
+  'vagaro',
+  'fresha',
+  'yelp',
+  'opentable',
+  'resy',
+  'doordash',
+  'ubereats',
+  'grubhub',
+  'postmates',
+  'google',
+  'facebook',
+  'instagram',
+  'tiktok',
+  'twitter',
+  'youtube',
+  'linkedin',
+  'hubspot',
+  'mailchimp',
+]);
+
 const FB_IGNORED_PATHS = new Set([
   'sharer',
   'sharer.php',
@@ -158,13 +205,163 @@ const TW_IGNORED_PATHS = new Set([
   'hashtag',
 ]);
 
+const JUNK_EMAIL_DOMAINS = new Set([
+  'example.com',
+  'example.org',
+  'example.net',
+  'sentry.io',
+  'wixpress.com',
+  'wix.com',
+  'squarespace.com',
+  'godaddy.com',
+  'wordpress.org',
+  'wordpress.com',
+  'cloudflare.com',
+  'googleapis.com',
+  'gstatic.com',
+  'w3.org',
+  'schema.org',
+  'yourdomain.com',
+  'domain.com',
+  'yoursite.com',
+  'email.com',
+  'test.com',
+  'latofonts.com',
+  'fontawesome.com',
+  'jquery.com',
+  'shopify.com',
+  'toasttab.com',
+  'bentobox.com',
+  'webflow.io',
+  'mailchimp.com',
+  'hubspot.com',
+  'zendesk.com',
+  'intercom.io',
+  'yelp.com',
+  'clutch.co',
+  'bbb.org',
+]);
+
+const FREE_MAIL_PROVIDERS = new Set([
+  'gmail.com',
+  'yahoo.com',
+  'outlook.com',
+  'hotmail.com',
+  'icloud.com',
+  'aol.com',
+  'proton.me',
+  'protonmail.com',
+  'me.com',
+  'live.com',
+]);
+
+function getRootDomain(urlOrDomain?: string): string | undefined {
+  if (!urlOrDomain) return undefined;
+  try {
+    const withProto = urlOrDomain.startsWith('http') ? urlOrDomain : `https://${urlOrDomain}`;
+    const host = new URL(withProto).hostname.toLowerCase().replace(/^www\./, '');
+    const parts = host.split('.').filter(Boolean);
+    if (parts.length >= 2) {
+      return parts.slice(-2).join('.');
+    }
+    return host || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function getBusinessNameTokens(businessName: string): string[] {
+  const stopWords = new Set([
+    'the',
+    'and',
+    'llc',
+    'inc',
+    'corp',
+    'co',
+    'ltd',
+    'group',
+    'services',
+    'company',
+    'agency',
+    'solutions',
+    'studio',
+    'restaurant',
+    'clinic',
+  ]);
+  return businessName
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 4 && !stopWords.has(w));
+}
+
+function isJunkEmail(email: string): boolean {
+  const lower = email.trim().toLowerCase();
+  if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,12}$/.test(lower)) {
+    return true;
+  }
+  const [local, domain] = lower.split('@');
+  if (!local || !domain) return true;
+
+  if (/\.(png|jpg|jpeg|gif|svg|webp|css|js|woff|woff2|pdf)$/i.test(lower)) {
+    return true;
+  }
+  if (JUNK_EMAIL_DOMAINS.has(domain)) return true;
+  for (const blocked of JUNK_EMAIL_DOMAINS) {
+    if (domain.endsWith(`.${blocked}`)) return true;
+  }
+
+  if (
+    /^(no-?reply|donotreply|do-not-reply|bounce|mailer-daemon|postmaster|abuse|dmca|webmaster|u00\d+|2x|3x|test|user|name|yourname)/.test(
+      local
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function isExternalEmailPlausible(
+  email: string,
+  businessName: string,
+  websiteUrl?: string
+): { plausible: boolean; confidence: 'verified_domain' | 'external_match' } {
+  const lower = email.trim().toLowerCase();
+  if (isJunkEmail(lower)) {
+    return { plausible: false, confidence: 'external_match' };
+  }
+  const [local, domain] = lower.split('@');
+  const siteRoot = getRootDomain(websiteUrl);
+  const emailRoot = getRootDomain(domain);
+
+  if (siteRoot && emailRoot && siteRoot === emailRoot) {
+    return { plausible: true, confidence: 'verified_domain' };
+  }
+
+  const tokens = getBusinessNameTokens(businessName);
+  const compactDomain = domain.replace(/[^a-z0-9]/g, '');
+  const compactLocal = local.replace(/[^a-z0-9]/g, '');
+
+  if (FREE_MAIL_PROVIDERS.has(domain)) {
+    // Require at least one business token in the local-part for free email providers found externally
+    const matchesName = tokens.some((t) => compactLocal.includes(t));
+    return { plausible: matchesName || !websiteUrl, confidence: 'external_match' };
+  }
+
+  // Commercial domain from external search: must match business name token if website wasn't available
+  const matchesBusinessDomain = tokens.some((t) => compactDomain.includes(t));
+  return { plausible: matchesBusinessDomain, confidence: 'external_match' };
+}
+
 function normalizeInstagramUrl(raw?: string | null): { url?: string; handle?: string } {
   if (!raw || typeof raw !== 'string') return {};
   const clean = raw.startsWith('http') ? raw : raw.startsWith('//') ? `https:${raw}` : `https://${raw}`;
   const match = clean.match(/instagram\.com\/([a-zA-Z0-9_.]{2,30})(?:\/|\?|$)/i);
   if (match && match[1]) {
     const slug = match[1];
-    if (!IG_IGNORED_PATHS.has(slug.toLowerCase())) {
+    const lowerSlug = slug.toLowerCase();
+    if (!IG_IGNORED_PATHS.has(lowerSlug) && !PLATFORM_SOCIAL_HANDLES.has(lowerSlug)) {
       return {
         url: `https://www.instagram.com/${slug}/`,
         handle: `@${slug}`,
@@ -185,7 +382,7 @@ function normalizeFacebookUrl(raw?: string | null): string | undefined {
   const match = clean.match(/(?:facebook\.com|fb\.com)\/([a-zA-Z0-9_.-]{3,60})(?:\/|\?|$)/i);
   if (match && match[1]) {
     const slug = match[1].toLowerCase();
-    if (!FB_IGNORED_PATHS.has(slug) && !/^\d+$/.test(slug)) {
+    if (!FB_IGNORED_PATHS.has(slug) && !PLATFORM_SOCIAL_HANDLES.has(slug) && !/^\d+$/.test(slug)) {
       return `https://www.facebook.com/${match[1]}`;
     }
   }
@@ -196,7 +393,7 @@ function normalizeTikTokUrl(raw?: string | null): string | undefined {
   if (!raw || typeof raw !== 'string') return undefined;
   const clean = raw.startsWith('http') ? raw : raw.startsWith('//') ? `https:${raw}` : `https://${raw}`;
   const match = clean.match(/tiktok\.com\/@([a-zA-Z0-9_.-]{2,30})(?:\/|\?|$)/i);
-  if (match && match[1]) {
+  if (match && match[1] && !PLATFORM_SOCIAL_HANDLES.has(match[1].toLowerCase())) {
     return `https://www.tiktok.com/@${match[1]}`;
   }
   return undefined;
@@ -206,7 +403,12 @@ function normalizeTwitterUrl(raw?: string | null): string | undefined {
   if (!raw || typeof raw !== 'string') return undefined;
   const clean = raw.startsWith('http') ? raw : raw.startsWith('//') ? `https:${raw}` : `https://${raw}`;
   const match = clean.match(/(?:twitter\.com|x\.com)\/([a-zA-Z0-9_]{2,20})(?:\/|\?|$)/i);
-  if (match && match[1] && !TW_IGNORED_PATHS.has(match[1].toLowerCase())) {
+  if (
+    match &&
+    match[1] &&
+    !TW_IGNORED_PATHS.has(match[1].toLowerCase()) &&
+    !PLATFORM_SOCIAL_HANDLES.has(match[1].toLowerCase())
+  ) {
     return `https://twitter.com/${match[1]}`;
   }
   return undefined;
@@ -222,11 +424,134 @@ function normalizeYouTubeUrl(raw?: string | null): string | undefined {
   return undefined;
 }
 
-function extractSocialsFromHtml(html: string): ExtractedSocials {
+function decodeHtmlEntities(input: string): string {
+  return input
+    .replace(/&#64;|&#x40;/gi, '@')
+    .replace(/&#46;|&#x2e;/gi, '.')
+    .replace(/&amp;/gi, '&');
+}
+
+interface EmailCandidate {
+  email: string;
+  source: string;
+}
+
+function pickBestSiteEmail(
+  candidates: EmailCandidate[],
+  websiteUrl?: string
+): {
+  email?: string;
+  source?: string;
+  confidence?: 'verified_domain' | 'site_listed';
+} {
+  if (candidates.length === 0) return {};
+
+  const siteRoot = getRootDomain(websiteUrl);
+  const scored = new Map<
+    string,
+    { email: string; source: string; score: number; matchesDomain: boolean }
+  >();
+
+  for (const c of candidates) {
+    const email = c.email.trim().toLowerCase();
+    if (isJunkEmail(email)) continue;
+
+    const [local, domain] = email.split('@');
+    const emailRoot = getRootDomain(domain);
+    const matchesDomain = Boolean(siteRoot && emailRoot && siteRoot === emailRoot);
+
+    let score = 0;
+    if (matchesDomain) score += 100;
+    else if (FREE_MAIL_PROVIDERS.has(domain)) score += 35;
+    else score += 10;
+
+    if (c.source === 'website_schema') score += 30;
+    else if (c.source === 'website_mailto' || c.source === 'contact_page') score += 25;
+    else if (c.source === 'website_text') score += 12;
+
+    if (
+      /^(info|contact|hello|office|team|sales|bookings|appointments|reservations|admin|support|inquiries|frontdesk|help)$/.test(
+        local
+      )
+    ) {
+      score += 20;
+    }
+    if (/^(privacy|legal|dmca|accessibility|compliance|careers|jobs)$/.test(local)) {
+      score -= 30;
+    }
+
+    const existing = scored.get(email);
+    if (!existing || score > existing.score) {
+      scored.set(email, { email, source: c.source, score, matchesDomain });
+    }
+  }
+
+  const best = Array.from(scored.values()).sort((a, b) => b.score - a.score)[0];
+  if (!best) return {};
+
+  return {
+    email: best.email,
+    source: best.source,
+    confidence: best.matchesDomain ? 'verified_domain' : 'site_listed',
+  };
+}
+
+function extractJsonLdSignals(html: string): {
+  sameAsUrls: string[];
+  emails: string[];
+} {
+  const sameAsUrls: string[] = [];
+  const emails: string[] = [];
+
+  const scriptRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = scriptRegex.exec(html)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1].trim());
+      const visit = (node: unknown) => {
+        if (!node || typeof node !== 'object') return;
+        if (Array.isArray(node)) {
+          node.forEach(visit);
+          return;
+        }
+        const obj = node as Record<string, unknown>;
+        if (typeof obj.email === 'string') {
+          emails.push(obj.email.replace(/^mailto:/i, '').trim());
+        }
+        if (typeof obj.sameAs === 'string') {
+          sameAsUrls.push(obj.sameAs);
+        } else if (Array.isArray(obj.sameAs)) {
+          obj.sameAs.forEach((item) => {
+            if (typeof item === 'string') sameAsUrls.push(item);
+          });
+        }
+        Object.values(obj).forEach((v) => {
+          if (v && typeof v === 'object') visit(v);
+        });
+      };
+      visit(parsed);
+    } catch {
+      // ignore malformed JSON-LD blocks
+    }
+  }
+
+  return { sameAsUrls, emails };
+}
+
+function extractSocialsFromHtml(
+  rawHtml: string,
+  websiteUrl?: string,
+  pageKind: 'home' | 'contact' = 'home'
+): ExtractedSocials {
+  const html = decodeHtmlEntities(rawHtml);
   const result: ExtractedSocials = {};
+  const jsonLd = extractJsonLdSignals(html);
+
+  // Combine JSON-LD sameAs URLs first (highest precision), then HTML URLs
+  const allCandidateText = `${jsonLd.sameAsUrls.join('\n')}\n${html}`;
 
   // 1. Instagram
-  const igMatches = html.match(
+  const igMatches = allCandidateText.match(
     /(?:https?:)?\/\/(?:www\.)?instagram\.com\/([a-zA-Z0-9_.]{2,30})\/?(?=[^a-zA-Z0-9_.]|$)/gi
   );
   if (igMatches) {
@@ -235,13 +560,14 @@ function extractSocialsFromHtml(html: string): ExtractedSocials {
       if (normalized.url) {
         result.instagram = normalized.url;
         result.instagramHandle = normalized.handle;
+        result.instagramConfidence = 'website_verified';
         break;
       }
     }
   }
 
   // 2. Facebook
-  const fbMatches = html.match(
+  const fbMatches = allCandidateText.match(
     /(?:https?:)?\/\/(?:www\.)?(?:facebook\.com|fb\.com)\/([a-zA-Z0-9_.-]{3,60})\/?(?=[^a-zA-Z0-9_.-]|$)/gi
   );
   if (fbMatches) {
@@ -255,15 +581,21 @@ function extractSocialsFromHtml(html: string): ExtractedSocials {
   }
 
   // 3. TikTok
-  const tiktokMatches = html.match(
+  const tiktokMatches = allCandidateText.match(
     /(?:https?:)?\/\/(?:www\.)?tiktok\.com\/@([a-zA-Z0-9_.-]{2,30})\/?/gi
   );
-  if (tiktokMatches && tiktokMatches.length > 0) {
-    result.tiktok = normalizeTikTokUrl(tiktokMatches[0]);
+  if (tiktokMatches) {
+    for (const rawUrl of tiktokMatches) {
+      const tt = normalizeTikTokUrl(rawUrl);
+      if (tt) {
+        result.tiktok = tt;
+        break;
+      }
+    }
   }
 
   // 4. Twitter / X
-  const twMatches = html.match(
+  const twMatches = allCandidateText.match(
     /(?:https?:)?\/\/(?:www\.)?(?:twitter\.com|x\.com)\/([a-zA-Z0-9_]{2,20})\/?/gi
   );
   if (twMatches) {
@@ -277,26 +609,62 @@ function extractSocialsFromHtml(html: string): ExtractedSocials {
   }
 
   // 5. YouTube
-  const ytMatches = html.match(
+  const ytMatches = allCandidateText.match(
     /(?:https?:)?\/\/(?:www\.)?youtube\.com\/(?:@|c\/|channel\/)([a-zA-Z0-9_.-]+)/gi
   );
   if (ytMatches && ytMatches.length > 0) {
     result.youtube = normalizeYouTubeUrl(ytMatches[0]);
   }
 
-  // 6. Email from mailto
-  const mailtoMatches = html.match(/mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
-  if (mailtoMatches && mailtoMatches[1]) {
-    const candidate = mailtoMatches[1].toLowerCase();
-    if (!candidate.includes('example.com') && !candidate.includes('sentry.io')) {
-      result.websiteEmail = candidate;
+  // 6. Email candidates from JSON-LD, mailto:, and visible text
+  const emailCandidates: EmailCandidate[] = [];
+
+  for (const ldEmail of jsonLd.emails) {
+    emailCandidates.push({ email: ldEmail, source: 'website_schema' });
+  }
+
+  const mailtoRegex = /mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,12})/gi;
+  let mailtoMatch: RegExpExecArray | null;
+  while ((mailtoMatch = mailtoRegex.exec(html)) !== null) {
+    emailCandidates.push({
+      email: mailtoMatch[1],
+      source: pageKind === 'contact' ? 'contact_page' : 'website_mailto',
+    });
+  }
+
+  // Scan visible text (strip script/style tags first to avoid JS bundle noise)
+  const visibleText = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ');
+  const textEmails = visibleText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,12}/g);
+  if (textEmails) {
+    for (const rawEmail of textEmails.slice(0, 15)) {
+      emailCandidates.push({
+        email: rawEmail,
+        source: pageKind === 'contact' ? 'contact_page' : 'website_text',
+      });
     }
+  }
+
+  const bestEmail = pickBestSiteEmail(emailCandidates, websiteUrl);
+  if (bestEmail.email) {
+    result.websiteEmail = bestEmail.email;
+    result.emailSource = bestEmail.source;
+    result.emailConfidence = bestEmail.confidence;
   }
 
   return result;
 }
 
-async function fetchHtmlWithTimeout(url: string, timeoutMs = 5000): Promise<string | null> {
+interface HtmlFetchResult {
+  html: string | null;
+  finalUrl?: string;
+  statusCode?: number;
+  reachable: boolean;
+}
+
+async function fetchHtmlWithTimeout(url: string, timeoutMs = 5000): Promise<HtmlFetchResult> {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -312,10 +680,23 @@ async function fetchHtmlWithTimeout(url: string, timeoutMs = 5000): Promise<stri
     });
 
     clearTimeout(timeout);
-    if (!response.ok) return null;
-    return await response.text();
+    if (!response.ok) {
+      return {
+        html: null,
+        finalUrl: response.url || url,
+        statusCode: response.status,
+        reachable: false,
+      };
+    }
+    const html = await response.text();
+    return {
+      html,
+      finalUrl: response.url || url,
+      statusCode: response.status,
+      reachable: true,
+    };
   } catch {
-    return null;
+    return { html: null, reachable: false };
   }
 }
 
@@ -324,43 +705,92 @@ async function scanWebsiteForSocials(websiteUrl: string): Promise<ExtractedSocia
     return {};
   }
 
-  const html = await fetchHtmlWithTimeout(websiteUrl, 5500);
-  if (!html) return {};
+  const homeRes = await fetchHtmlWithTimeout(websiteUrl, 5500);
+  if (!homeRes.html) {
+    return {
+      websiteReachable: homeRes.reachable,
+      websiteStatusCode: homeRes.statusCode,
+    };
+  }
 
-  const primary = extractSocialsFromHtml(html);
+  const effectiveSiteUrl = homeRes.finalUrl || websiteUrl;
+  const primary = extractSocialsFromHtml(homeRes.html, effectiveSiteUrl, 'home');
+  primary.websiteReachable = true;
+  primary.websiteStatusCode = homeRes.statusCode;
 
-  // If Instagram wasn't found on the homepage, check a link-in-bio (Linktree/Beacons) or /contact page
-  if (!primary.instagram) {
-    const linktreeMatch = html.match(/https?:\/\/(?:linktr\.ee|beacons\.ai|bento\.me)\/[a-zA-Z0-9_.-]+/i);
-    let secondaryUrl: string | undefined = linktreeMatch?.[0];
+  // Check Linktree or /contact & /about pages whenever EITHER Instagram OR a verified email is missing
+  if (!primary.instagram || !primary.websiteEmail || primary.emailConfidence !== 'verified_domain') {
+    const secondaryUrls: string[] = [];
 
-    if (!secondaryUrl) {
-      const contactHrefMatch = html.match(/href=["']([^"']*(?:contact|about|connect|social)[^"']*)["']/i);
-      if (contactHrefMatch?.[1]) {
-        try {
-          const resolved = new URL(contactHrefMatch[1], websiteUrl);
-          if (resolved.origin === new URL(websiteUrl).origin && resolved.href !== websiteUrl) {
-            secondaryUrl = resolved.href;
-          }
-        } catch {
-          // ignore invalid URL
+    const linktreeMatch = homeRes.html.match(
+      /https?:\/\/(?:linktr\.ee|beacons\.ai|bento\.me)\/[a-zA-Z0-9_.-]+/i
+    );
+    if (linktreeMatch?.[0]) {
+      secondaryUrls.push(linktreeMatch[0]);
+    }
+
+    const contactMatches = Array.from(
+      homeRes.html.matchAll(/href=["']([^"']*(?:contact|about|connect|team)[^"']*)["']/gi)
+    );
+    const siteOrigin = (() => {
+      try {
+        return new URL(effectiveSiteUrl).origin;
+      } catch {
+        return '';
+      }
+    })();
+
+    for (const m of contactMatches) {
+      if (secondaryUrls.length >= 2) break;
+      try {
+        const resolved = new URL(m[1], effectiveSiteUrl);
+        if (
+          resolved.origin === siteOrigin &&
+          resolved.href !== effectiveSiteUrl &&
+          !/\.(pdf|jpg|png|css|js)$/i.test(resolved.pathname) &&
+          !secondaryUrls.includes(resolved.href)
+        ) {
+          secondaryUrls.push(resolved.href);
         }
+      } catch {
+        // ignore invalid href
       }
     }
 
-    if (secondaryUrl) {
-      const secondaryHtml = await fetchHtmlWithTimeout(secondaryUrl, 4000);
-      if (secondaryHtml) {
-        const extra = extractSocialsFromHtml(secondaryHtml);
-        return {
-          instagram: primary.instagram || extra.instagram,
-          instagramHandle: primary.instagramHandle || extra.instagramHandle,
-          facebook: primary.facebook || extra.facebook,
-          tiktok: primary.tiktok || extra.tiktok,
-          twitter: primary.twitter || extra.twitter,
-          youtube: primary.youtube || extra.youtube,
-          websiteEmail: primary.websiteEmail || extra.websiteEmail,
-        };
+    // Common fallback /contact path if no explicit link was found and email is still missing
+    if (secondaryUrls.length === 0 && !primary.websiteEmail && siteOrigin) {
+      secondaryUrls.push(`${siteOrigin}/contact`);
+    }
+
+    for (const subUrl of secondaryUrls.slice(0, 2)) {
+      const subRes = await fetchHtmlWithTimeout(subUrl, 3800);
+      if (!subRes.html) continue;
+
+      const extra = extractSocialsFromHtml(subRes.html, effectiveSiteUrl, 'contact');
+      if (!primary.instagram && extra.instagram) {
+        primary.instagram = extra.instagram;
+        primary.instagramHandle = extra.instagramHandle;
+        primary.instagramConfidence = 'website_verified';
+      }
+      if (!primary.facebook && extra.facebook) primary.facebook = extra.facebook;
+      if (!primary.tiktok && extra.tiktok) primary.tiktok = extra.tiktok;
+      if (!primary.twitter && extra.twitter) primary.twitter = extra.twitter;
+      if (!primary.youtube && extra.youtube) primary.youtube = extra.youtube;
+
+      // Upgrade email if we didn't have one or found a verified domain email on /contact
+      if (
+        extra.websiteEmail &&
+        (!primary.websiteEmail ||
+          (primary.emailConfidence !== 'verified_domain' &&
+            extra.emailConfidence === 'verified_domain'))
+      ) {
+        primary.websiteEmail = extra.websiteEmail;
+        primary.emailSource = extra.emailSource;
+        primary.emailConfidence = extra.emailConfidence;
+      }
+
+      if (primary.instagram && primary.emailConfidence === 'verified_domain') {
+        break;
       }
     }
   }
@@ -400,15 +830,15 @@ async function discoverSocialsViaGoogleSearch(
     }
 
     const locationStr = [city, state].filter(Boolean).join(', ');
-    const prompt = `Use Google Search to find the official social media profiles (especially Instagram) for this specific US business across Google, Instagram, Facebook, TikTok, LinkedIn, Linktree, Yelp, Clutch, or other business directories.
+    const prompt = `Use Google Search to find the official social media profiles (especially Instagram) and publicly listed business contact email for this specific US business across Google, Instagram, Facebook, TikTok, LinkedIn, Linktree, Yelp, Clutch, or official directories.
 
 Business Name: ${businessName}
 Location: ${locationStr || 'United States'}
 Official Website (if known): ${websiteUrl || 'Not listed'}
 
-Strict rules:
-1. Only include profile URLs that genuinely appear in Google Search results and clearly belong to "${businessName}" in ${locationStr || 'its US location'}.
-2. Do NOT guess or fabricate handles or URLs. If a profile cannot be verified from search results, set its value to null.
+Strict verification rules:
+1. Only include profile URLs and emails that genuinely appear in Google Search results and clearly belong to "${businessName}" in ${locationStr || 'its US location'}.
+2. Do NOT guess or fabricate handles or emails, and NEVER return aggregator/directory emails (like yelp.com or clutch.co) or website-builder handles (like wix/squarespace). If unverified, set to null.
 3. Return ONLY a JSON object with this exact shape:
 {
   "instagram": "https://www.instagram.com/handle/" or null,
@@ -444,6 +874,7 @@ Strict rules:
             if (ig.url) {
               socials.instagram = ig.url;
               socials.instagramHandle = ig.handle;
+              socials.instagramConfidence = 'search_match';
             }
           }
           if (!socials.facebook) {
@@ -469,6 +900,7 @@ Strict rules:
           if (ig.url) {
             socials.instagram = ig.url;
             socials.instagramHandle = ig.handle;
+            socials.instagramConfidence = 'search_match';
           }
         }
         if (!socials.facebook && typeof parsed.facebook === 'string') {
@@ -484,12 +916,12 @@ Strict rules:
           socials.youtube = normalizeYouTubeUrl(parsed.youtube);
         }
         if (typeof parsed.email === 'string') {
-          const emailMatch = parsed.email
-            .trim()
-            .toLowerCase()
-            .match(/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/);
-          if (emailMatch && !parsed.email.includes('example.com')) {
-            socials.websiteEmail = emailMatch[0];
+          const cleanCandidate = parsed.email.trim().toLowerCase();
+          const check = isExternalEmailPlausible(cleanCandidate, businessName, websiteUrl);
+          if (check.plausible) {
+            socials.websiteEmail = cleanCandidate;
+            socials.emailSource = 'google_search';
+            socials.emailConfidence = check.confidence;
           }
         }
       }
@@ -629,6 +1061,7 @@ async function discoverSocialsViaOpenDirectories(
       const normalized = normalizeInstagramUrl(igUrl);
       socials.instagram = normalized.url;
       socials.instagramHandle = normalized.handle;
+      socials.instagramConfidence = 'directory_verified';
     }
   }
   const rawFb = tags['contact:facebook'] || tags.facebook;
@@ -644,8 +1077,13 @@ async function discoverSocialsViaOpenDirectories(
     socials.twitter = normalizeHandleOrUrl(rawTw, 'twitter');
   }
   const rawEmail = tags['contact:email'] || tags.email;
-  if (rawEmail && rawEmail.includes('@')) {
-    socials.websiteEmail = rawEmail.trim().toLowerCase();
+  if (rawEmail) {
+    const check = isExternalEmailPlausible(rawEmail, businessName, alreadyScannedUrl);
+    if (check.plausible) {
+      socials.websiteEmail = rawEmail.trim().toLowerCase();
+      socials.emailSource = 'osm_directory';
+      socials.emailConfidence = check.confidence;
+    }
   }
 
   let discoveredWebsite: string | undefined = tags['contact:website'] || tags.website || tags.url;
@@ -675,6 +1113,7 @@ async function discoverSocialsViaOpenDirectories(
           const norm = normalizeInstagramUrl(igUrl);
           socials.instagram = norm.url;
           socials.instagramHandle = norm.handle;
+          socials.instagramConfidence = 'directory_verified';
         }
       }
     }
@@ -697,22 +1136,27 @@ async function discoverSocialsViaOpenDirectories(
 
   // If OSM/Wikidata found a website URL that wasn't already scanned (or failed before), scan it!
   if (
-    !socials.instagram &&
+    (!socials.instagram || !socials.websiteEmail) &&
     discoveredWebsite &&
     discoveredWebsite.startsWith('http') &&
     discoveredWebsite.replace(/\/$/, '').toLowerCase() !==
       (alreadyScannedUrl || '').replace(/\/$/, '').toLowerCase()
   ) {
     const siteExtra = await scanWebsiteForSocials(discoveredWebsite);
-    if (siteExtra.instagram) {
+    if (!socials.instagram && siteExtra.instagram) {
       socials.instagram = siteExtra.instagram;
       socials.instagramHandle = siteExtra.instagramHandle;
+      socials.instagramConfidence = 'website_verified';
     }
     if (!socials.facebook && siteExtra.facebook) socials.facebook = siteExtra.facebook;
     if (!socials.tiktok && siteExtra.tiktok) socials.tiktok = siteExtra.tiktok;
     if (!socials.twitter && siteExtra.twitter) socials.twitter = siteExtra.twitter;
     if (!socials.youtube && siteExtra.youtube) socials.youtube = siteExtra.youtube;
-    if (!socials.websiteEmail && siteExtra.websiteEmail) socials.websiteEmail = siteExtra.websiteEmail;
+    if (!socials.websiteEmail && siteExtra.websiteEmail) {
+      socials.websiteEmail = siteExtra.websiteEmail;
+      socials.emailSource = siteExtra.emailSource;
+      socials.emailConfidence = siteExtra.emailConfidence;
+    }
     discoveredSources.push({
       title: discoveredWebsite.replace(/^https?:\/\/(www\.)?/, '').split('/')[0],
       url: discoveredWebsite,
@@ -728,10 +1172,10 @@ const socialDiscoveryCache = new Map<
 >();
 
 /**
- * Discovers social media presence (especially Instagram):
- * 1. Scans the business's official website (and Linktree / contact pages) if available.
- * 2. Checks free open directories (OpenStreetMap Nominatim & Wikidata) before consuming API quota.
- * 3. If Instagram or socials are still missing, falls back to rate-limited Gemini Google Search grounding.
+ * Discovers & verifies social media and contact information:
+ * 1. Scans the business's official website (JSON-LD, homepage, /contact page, Linktree) and validates reachability.
+ * 2. Checks open directories (OpenStreetMap Nominatim & Wikidata) if Instagram or verified email is missing.
+ * 3. Falls back to rate-limited Gemini Google Search grounding with anti-false-positive validation.
  */
 export async function discoverWebsiteSocials(
   websiteUrl: string,
@@ -750,21 +1194,22 @@ export async function discoverWebsiteSocials(
     searchQuery
   )}`;
 
-  // Stage 1: Scan business website
+  // Stage 1: Scan business website (including JSON-LD & /contact page)
   const siteSocials = await scanWebsiteForSocials(websiteUrl);
   const foundOnWebsite = Boolean(
     siteSocials.instagram ||
       siteSocials.facebook ||
       siteSocials.tiktok ||
       siteSocials.twitter ||
-      siteSocials.youtube
+      siteSocials.youtube ||
+      siteSocials.websiteEmail
   );
 
   let externalSocials: ExtractedSocials = {};
   let discoveredSources: Array<{ title?: string; url: string }> = [];
 
-  // Stage 2: Check free open directories (OpenStreetMap & Wikidata) if Instagram or socials are missing
-  if (!siteSocials.instagram || !foundOnWebsite) {
+  // Stage 2: Check open directories (OpenStreetMap & Wikidata) if Instagram or verified email is still missing
+  if (!siteSocials.instagram || !siteSocials.websiteEmail) {
     const dirResult = await discoverSocialsViaOpenDirectories(
       businessName,
       city,
@@ -774,27 +1219,37 @@ export async function discoverWebsiteSocials(
     externalSocials = { ...dirResult.socials };
     discoveredSources = [...dirResult.discoveredSources];
 
-    // Stage 3: Fall back to Gemini Google Search grounding only if Instagram is still missing and quota allows
-    if (!siteSocials.instagram && !externalSocials.instagram && isGeminiAvailable()) {
-      const googleResult = await discoverSocialsViaGoogleSearch(
-        businessName,
-        city,
-        state,
-        websiteUrl
-      );
-      externalSocials = {
-        instagram: externalSocials.instagram || googleResult.socials.instagram,
-        instagramHandle:
-          externalSocials.instagramHandle || googleResult.socials.instagramHandle,
-        facebook: externalSocials.facebook || googleResult.socials.facebook,
-        tiktok: externalSocials.tiktok || googleResult.socials.tiktok,
-        twitter: externalSocials.twitter || googleResult.socials.twitter,
-        youtube: externalSocials.youtube || googleResult.socials.youtube,
-        websiteEmail: externalSocials.websiteEmail || googleResult.socials.websiteEmail,
-      };
-      for (const src of googleResult.discoveredSources) {
-        if (!discoveredSources.some((existing) => existing.url === src.url)) {
-          discoveredSources.push(src);
+    // Stage 3: Fall back to Gemini Google Search grounding only if Instagram or email is still missing and quota allows
+    if (
+      (!siteSocials.instagram && !externalSocials.instagram) ||
+      (!siteSocials.websiteEmail && !externalSocials.websiteEmail)
+    ) {
+      if (isGeminiAvailable()) {
+        const googleResult = await discoverSocialsViaGoogleSearch(
+          businessName,
+          city,
+          state,
+          websiteUrl
+        );
+        externalSocials = {
+          instagram: externalSocials.instagram || googleResult.socials.instagram,
+          instagramHandle:
+            externalSocials.instagramHandle || googleResult.socials.instagramHandle,
+          instagramConfidence:
+            externalSocials.instagramConfidence || googleResult.socials.instagramConfidence,
+          facebook: externalSocials.facebook || googleResult.socials.facebook,
+          tiktok: externalSocials.tiktok || googleResult.socials.tiktok,
+          twitter: externalSocials.twitter || googleResult.socials.twitter,
+          youtube: externalSocials.youtube || googleResult.socials.youtube,
+          websiteEmail: externalSocials.websiteEmail || googleResult.socials.websiteEmail,
+          emailSource: externalSocials.emailSource || googleResult.socials.emailSource,
+          emailConfidence:
+            externalSocials.emailConfidence || googleResult.socials.emailConfidence,
+        };
+        for (const src of googleResult.discoveredSources) {
+          if (!discoveredSources.some((existing) => existing.url === src.url)) {
+            discoveredSources.push(src);
+          }
         }
       }
     }
@@ -802,18 +1257,23 @@ export async function discoverWebsiteSocials(
 
   const instagram = siteSocials.instagram || externalSocials.instagram;
   const instagramHandle = siteSocials.instagramHandle || externalSocials.instagramHandle;
+  const instagramConfidence =
+    siteSocials.instagramConfidence || externalSocials.instagramConfidence;
   const facebook = siteSocials.facebook || externalSocials.facebook;
   const tiktok = siteSocials.tiktok || externalSocials.tiktok;
   const twitter = siteSocials.twitter || externalSocials.twitter;
   const youtube = siteSocials.youtube || externalSocials.youtube;
   const websiteEmail = siteSocials.websiteEmail || externalSocials.websiteEmail;
+  const emailSource = siteSocials.emailSource || externalSocials.emailSource;
+  const emailConfidence = siteSocials.emailConfidence || externalSocials.emailConfidence;
 
   const foundExternally = Boolean(
     externalSocials.instagram ||
       externalSocials.facebook ||
       externalSocials.tiktok ||
       externalSocials.twitter ||
-      externalSocials.youtube
+      externalSocials.youtube ||
+      externalSocials.websiteEmail
   );
 
   let source: SocialDiscoverySource = 'not_found';
@@ -828,11 +1288,16 @@ export async function discoverWebsiteSocials(
   const result: SocialProfiles = {
     instagram,
     instagramHandle,
+    instagramConfidence,
     facebook,
     tiktok,
     twitter,
     youtube,
     websiteEmail,
+    emailSource,
+    emailConfidence,
+    websiteReachable: siteSocials.websiteReachable,
+    websiteStatusCode: siteSocials.websiteStatusCode,
     source,
     lastScannedAt: new Date().toISOString(),
     instagramSearchUrl,

@@ -25,49 +25,46 @@ export interface RegionState {
   territory?: boolean;
 }
 
-export const BUSINESS_INDUSTRIES: string[] = [
-  'Restaurants',
-  'Marketing Agencies',
-  'Web Designers',
-  'SEO Agencies',
+const SORTED_INDUSTRIES: string[] = [
   'Accountants',
-  'Real Estate Agents',
+  'Architecture & Interior Design',
+  'Auto Repair & Dealerships',
+  'Beauty & Spas',
+  'Chiropractors & Physical Therapy',
   'Cleaning Companies',
   'Construction Companies',
-  'Salons',
+  'Consulting Firms',
+  'Contractors & Handymen',
   'Dentists',
-  'Lawyers',
-  'Hotels',
   'Ecommerce Businesses',
+  'Electricians',
+  'Event Planners & Venues',
+  'Financial Advisors & Insurance',
+  'Fitness Studios & Gyms',
+  'Home Services & Landscaping',
+  'Hotels',
+  'HVAC Contractors',
+  'Lawyers',
+  'Marketing Agencies',
+  'Medical Clinics & Med Spas',
+  'Moving & Storage Companies',
+  'Pet Care & Veterinarians',
+  'Photography & Videography',
+  'Plumbers',
+  'Real Estate Agents',
+  'Restaurants',
+  'Roofing Companies',
+  'Salons',
+  'SEO Agencies',
   'Software Companies',
-  'Other Small Businesses',
-];
+  'Solar & Energy Installers',
+  'Travel & Hospitality',
+  'Web Designers',
+].sort((a, b) => a.localeCompare(b));
+
+export const BUSINESS_INDUSTRIES: string[] = [...SORTED_INDUSTRIES, 'Other'];
 
 export const INDUSTRY_SPECIALTIES: Record<string, string[]> = {
-  'Marketing Agencies': [
-    'Digital Marketing',
-    'Social Media Marketing',
-    'PPC & Paid Ads',
-    'Branding & Creative',
-    'PR & Communications',
-    'Lead Generation',
-  ],
-  'Web Designers': [
-    'WordPress Design',
-    'Shopify & Ecommerce',
-    'Custom Web Development',
-    'UI/UX Design',
-    'Small Business Websites',
-    'Webflow Agency',
-  ],
-  'SEO Agencies': [
-    'Local SEO',
-    'Technical SEO',
-    'Link Building',
-    'Ecommerce SEO',
-    'Enterprise SEO',
-    'Content Marketing',
-  ],
   Accountants: [
     'CPA Firms',
     'Small Business Bookkeeping',
@@ -76,13 +73,34 @@ export const INDUSTRY_SPECIALTIES: Record<string, string[]> = {
     'Forensic Accounting',
     'Fractional CFO',
   ],
-  'Real Estate Agents': [
-    'Residential Real Estate',
-    'Luxury Homes',
-    'Commercial Real Estate',
-    'Property Management',
-    'First-Time Home Buyers',
-    'Real Estate Brokerages',
+  'Architecture & Interior Design': [
+    'Residential Architects',
+    'Commercial Architecture',
+    'Interior Designers',
+    'Kitchen & Bath Design',
+    'Landscape Architecture',
+  ],
+  'Auto Repair & Dealerships': [
+    'Auto Repair Shops',
+    'Auto Body & Collision',
+    'Car Dealerships',
+    'Auto Detailing',
+    'Tire & Brake Shops',
+    'Transmission Repair',
+  ],
+  'Beauty & Spas': [
+    'Day Spas',
+    'Massage Therapy',
+    'Estheticians & Facials',
+    'Waxing & Laser Hair Removal',
+    'Nail & Spa Studios',
+  ],
+  'Chiropractors & Physical Therapy': [
+    'Chiropractors',
+    'Physical Therapy Clinics',
+    'Sports Rehab',
+    'Acupuncture Clinics',
+    'Pain Management',
   ],
   'Cleaning Companies': [
     'Residential House Cleaning',
@@ -97,16 +115,21 @@ export const INDUSTRY_SPECIALTIES: Record<string, string[]> = {
     'Home Remodeling',
     'Commercial Construction',
     'Custom Home Builders',
-    'Roofing & Siding',
     'Concrete & Excavation',
   ],
-  Salons: [
-    'Hair Salon',
-    'Nail Salon',
-    'Barbershop',
-    'Med Spa & Aesthetics',
-    'Balayage & Color Studio',
-    'Lash & Brow Studio',
+  'Consulting Firms': [
+    'Management Consulting',
+    'HR & Recruiting',
+    'Operations Consulting',
+    'IT Consulting',
+    'Business Coaching',
+  ],
+  'Contractors & Handymen': [
+    'Handyman Services',
+    'Home Renovation',
+    'Deck & Fence Builders',
+    'Flooring Installers',
+    'Painting Contractors',
   ],
   Dentists: [
     'Family Dentistry',
@@ -116,13 +139,48 @@ export const INDUSTRY_SPECIALTIES: Record<string, string[]> = {
     'Emergency Dental',
     'Dental Implants',
   ],
-  Lawyers: [
-    'Personal Injury',
-    'Family & Divorce Law',
-    'Immigration Law',
-    'Criminal Defense',
-    'Business & Corporate Law',
-    'Estate Planning',
+  'Ecommerce Businesses': [
+    'Ecommerce Fulfillment',
+    'Shopify Brands',
+    'Online Retail Stores',
+    'Direct to Consumer Brands',
+    'Wholesale Distributors',
+    'Subscription Boxes',
+  ],
+  Electricians: [
+    'Residential Electricians',
+    'Commercial Electrical',
+    'EV Charger Installation',
+    'Emergency Electrician',
+    'Panel Upgrades',
+  ],
+  'Event Planners & Venues': [
+    'Wedding Venues',
+    'Event Planning Agencies',
+    'Catering Companies',
+    'Party & Tent Rentals',
+    'Corporate Event Production',
+  ],
+  'Financial Advisors & Insurance': [
+    'Wealth Management',
+    'Independent Insurance Agencies',
+    'Mortgage Brokers',
+    'Retirement Planning',
+    'Commercial Insurance',
+  ],
+  'Fitness Studios & Gyms': [
+    'Personal Training Studios',
+    'Pilates & Yoga Studios',
+    'CrossFit & Functional Gyms',
+    'Martial Arts Academies',
+    'Boxing & Cycling Studios',
+  ],
+  'Home Services & Landscaping': [
+    'Landscaping & Lawn Care',
+    'Tree Services',
+    'Pest Control',
+    'Pool Cleaning & Repair',
+    'Garage Door Repair',
   ],
   Hotels: [
     'Boutique Hotels',
@@ -132,13 +190,94 @@ export const INDUSTRY_SPECIALTIES: Record<string, string[]> = {
     'Business Hotels',
     'Historic Inns',
   ],
-  'Ecommerce Businesses': [
-    'Ecommerce Fulfillment',
-    'Shopify Brands',
-    'Online Retail Stores',
-    'Direct to Consumer Brands',
-    'Wholesale Distributors',
-    'Subscription Boxes',
+  'HVAC Contractors': [
+    'AC Repair & Installation',
+    'Heating & Furnace Repair',
+    'Commercial HVAC',
+    'Duct Cleaning',
+    'Heat Pump Installation',
+  ],
+  Lawyers: [
+    'Personal Injury',
+    'Family & Divorce Law',
+    'Immigration Law',
+    'Criminal Defense',
+    'Business & Corporate Law',
+    'Estate Planning',
+  ],
+  'Marketing Agencies': [
+    'Digital Marketing',
+    'Social Media Marketing',
+    'PPC & Paid Ads',
+    'Branding & Creative',
+    'PR & Communications',
+    'Lead Generation',
+  ],
+  'Medical Clinics & Med Spas': [
+    'Med Spas & Aesthetics',
+    'Urgent Care Clinics',
+    'Dermatology Clinics',
+    'Optometrists & Eye Care',
+    'Wellness & IV Therapy',
+  ],
+  'Moving & Storage Companies': [
+    'Local Residential Movers',
+    'Long Distance Moving',
+    'Commercial Office Movers',
+    'Junk Removal',
+    'Self Storage Facilities',
+  ],
+  'Pet Care & Veterinarians': [
+    'Veterinary Clinics',
+    'Dog Grooming',
+    'Pet Boarding & Daycare',
+    'Dog Training',
+    'Emergency Vet Hospitals',
+  ],
+  'Photography & Videography': [
+    'Wedding Photographers',
+    'Commercial Video Production',
+    'Real Estate Photography',
+    'Portrait Studios',
+    'Brand Content Studios',
+  ],
+  Plumbers: [
+    'Emergency Plumbers',
+    'Drain & Sewer Cleaning',
+    'Water Heater Repair',
+    'Commercial Plumbing',
+    'Repiping & Leak Detection',
+  ],
+  'Real Estate Agents': [
+    'Residential Real Estate',
+    'Luxury Homes',
+    'Commercial Real Estate',
+    'Property Management',
+    'First-Time Home Buyers',
+    'Real Estate Brokerages',
+  ],
+  'Roofing Companies': [
+    'Residential Roof Repair',
+    'Commercial Roofing',
+    'Storm Damage Restoration',
+    'Metal Roofing',
+    'Gutter Installation',
+  ],
+  Salons: [
+    'Hair Salon',
+    'Nail Salon',
+    'Barbershop',
+    'Med Spa & Aesthetics',
+    'Balayage & Color Studio',
+    'Lash & Brow Studio',
+  ],
+  'SEO Agencies': [
+    'Local SEO',
+    'Technical SEO',
+    'Link Building',
+    'Ecommerce SEO',
+    'Enterprise SEO',
+    'Content Marketing',
   ],
   'Software Companies': [
     'SaaS Companies',
@@ -148,17 +287,37 @@ export const INDUSTRY_SPECIALTIES: Record<string, string[]> = {
     'Cybersecurity Firms',
     'Cloud Consulting',
   ],
-  'Other Small Businesses': [
-    'Auto Repair Shops',
-    'HVAC Contractors',
-    'Plumbers',
-    'Florists',
-    'Gyms & Fitness Studios',
+  'Solar & Energy Installers': [
+    'Residential Solar Panels',
+    'Commercial Solar',
+    'Solar Battery Storage',
+    'Energy Audits',
+  ],
+  'Travel & Hospitality': [
+    'Tour Operators',
+    'Vacation Rentals',
+    'Travel Agencies',
+    'Charter & Boat Rentals',
+  ],
+  'Web Designers': [
+    'WordPress Design',
+    'Shopify & Ecommerce',
+    'Custom Web Development',
+    'UI/UX Design',
+    'Small Business Websites',
+    'Webflow Agency',
+  ],
+  Other: [
     'Coffee Shops',
-    'Pet Grooming',
-    'Veterinarians',
-    'Photographers',
-    'Moving Companies',
+    'Dry Cleaners',
+    'Florists',
+    'Locksmiths',
+    'Tattoo Studios',
+    'Tutoring Centers',
+    'Bridal Boutiques',
+    'Daycare Centers',
+    'Printing & Sign Shops',
+    'Funeral Homes',
   ],
 };
 
@@ -323,8 +482,10 @@ export const POPULAR_CITY_HUBS = [
 ];
 
 export function buildPlaceSearchQuery(filters: SearchFilters): string {
-  const industry = filters.industry || 'Restaurants';
+  const rawIndustry = filters.industry || 'Restaurants';
+  const industry = rawIndustry === 'Other Small Businesses' ? 'Other' : rawIndustry;
   const specialty = (filters.cuisine || '').trim();
+  const customTerm = (filters.customIndustry || '').trim();
   const isAllSelected =
     !specialty ||
     specialty.toLowerCase() === 'all' ||
@@ -334,8 +495,8 @@ export function buildPlaceSearchQuery(filters: SearchFilters): string {
   let prefix = industry;
   if (industry === 'Restaurants') {
     prefix = isAllSelected ? 'restaurants' : `${specialty} restaurants`;
-  } else if (industry === 'Other Small Businesses') {
-    prefix = isAllSelected ? 'small businesses' : specialty;
+  } else if (industry === 'Other') {
+    prefix = customTerm || (isAllSelected ? 'small businesses' : specialty);
   } else {
     if (isAllSelected) {
       prefix = industry;
@@ -357,8 +518,10 @@ export const SearchForm: React.FC<SearchFormProps> = ({
 }) => {
   const [activeDishTab, setActiveDishTab] = useState<number>(0);
 
-  const selectedIndustry = filters.industry || 'Restaurants';
+  const selectedIndustry =
+    filters.industry === 'Other Small Businesses' ? 'Other' : filters.industry || 'Restaurants';
   const isRestaurants = selectedIndustry === 'Restaurants';
+  const isOther = selectedIndustry === 'Other';
   const industryNiches = INDUSTRY_SPECIALTIES[selectedIndustry] || [];
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -371,6 +534,7 @@ export const SearchForm: React.FC<SearchFormProps> = ({
     onChange({
       ...filters,
       industry: newIndustry,
+      customIndustry: newIndustry === 'Other' ? filters.customIndustry || '' : '',
       cuisine: newIndustry === 'Restaurants' ? 'All Restaurants' : '',
     });
   };
@@ -468,7 +632,7 @@ export const SearchForm: React.FC<SearchFormProps> = ({
             </select>
           </div>
 
-          {/* Specialty / Dish / Niche Input with Datalist */}
+          {/* Specialty / Dish / Custom Business Type Input */}
           <div className="md:col-span-2">
             <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
               {isRestaurants ? (
@@ -476,22 +640,39 @@ export const SearchForm: React.FC<SearchFormProps> = ({
               ) : (
                 <Tag className="w-3.5 h-3.5 text-indigo-400" />
               )}
-              <span>{isRestaurants ? 'Dish / Cuisine' : 'Niche / Specialty'}</span>
+              <span>
+                {isRestaurants
+                  ? 'Dish / Cuisine'
+                  : isOther
+                  ? 'Custom Business Type'
+                  : 'Niche / Specialty'}
+              </span>
             </label>
-            <input
-              type="text"
-              placeholder={
-                isRestaurants
-                  ? 'e.g. Brisket, Ramen'
-                  : industryNiches[0]
-                  ? `e.g. ${industryNiches[0]}`
-                  : 'Optional niche'
-              }
-              value={filters.cuisine}
-              onChange={(e) => onChange({ ...filters, cuisine: e.target.value })}
-              list={isRestaurants ? 'famous-dishes-datalist' : 'industry-niches-datalist'}
-              className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-colors"
-            />
+            {isOther ? (
+              <input
+                type="text"
+                placeholder="e.g. Dry Cleaners, Florist"
+                value={filters.customIndustry || ''}
+                onChange={(e) => onChange({ ...filters, customIndustry: e.target.value })}
+                list="industry-niches-datalist"
+                className="w-full bg-slate-900 border border-emerald-500/50 rounded-xl px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400 transition-colors"
+              />
+            ) : (
+              <input
+                type="text"
+                placeholder={
+                  isRestaurants
+                    ? 'e.g. Brisket, Ramen'
+                    : industryNiches[0]
+                    ? `e.g. ${industryNiches[0]}`
+                    : 'Optional niche'
+                }
+                value={filters.cuisine}
+                onChange={(e) => onChange({ ...filters, cuisine: e.target.value })}
+                list={isRestaurants ? 'famous-dishes-datalist' : 'industry-niches-datalist'}
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-colors"
+              />
+            )}
             <datalist id="famous-dishes-datalist">
               {FAMOUS_DISH_CATEGORIES.flatMap((c) => c.dishes).map((d) => (
                 <option key={d.name} value={d.name} />
@@ -597,33 +778,53 @@ export const SearchForm: React.FC<SearchFormProps> = ({
             <div className="flex items-center gap-1.5">
               <Tag className="w-3.5 h-3.5 text-indigo-400" />
               <span className="text-xs font-bold text-white">
-                {selectedIndustry} Niches &amp; Categories:
+                {isOther
+                  ? 'Custom Business Examples (or type any category above):'
+                  : `${selectedIndustry} Niches & Categories:`}
               </span>
               <span className="text-[11px] text-slate-400 hidden sm:inline">
-                Optional sub-specialty filter
+                {isOther ? 'Click any example or enter your own search term' : 'Optional sub-specialty filter'}
               </span>
             </div>
 
             <div className="flex flex-wrap items-center gap-1.5">
               <button
                 type="button"
-                onClick={() => onChange({ ...filters, cuisine: '' })}
+                onClick={() =>
+                  onChange({
+                    ...filters,
+                    cuisine: '',
+                    customIndustry: '',
+                  })
+                }
                 className={`text-[11px] px-2.5 py-1 rounded-full border transition-all cursor-pointer ${
-                  !filters.cuisine || filters.cuisine.toLowerCase() === 'all'
+                  isOther
+                    ? !filters.customIndustry
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
+                      : 'bg-slate-900/60 text-slate-400 border-slate-700/60 hover:text-slate-200 hover:border-slate-600'
+                    : !filters.cuisine || filters.cuisine.toLowerCase() === 'all'
                     ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
                     : 'bg-slate-900/60 text-slate-400 border-slate-700/60 hover:text-slate-200 hover:border-slate-600'
                 }`}
               >
-                ★ All {selectedIndustry}
+                ★ {isOther ? 'All Small Businesses' : `All ${selectedIndustry}`}
               </button>
 
               {industryNiches.map((niche) => {
-                const isSelected = filters.cuisine.toLowerCase() === niche.toLowerCase();
+                const isSelected = isOther
+                  ? (filters.customIndustry || '').toLowerCase() === niche.toLowerCase()
+                  : filters.cuisine.toLowerCase() === niche.toLowerCase();
                 return (
                   <button
                     key={niche}
                     type="button"
-                    onClick={() => onChange({ ...filters, cuisine: niche })}
+                    onClick={() =>
+                      onChange(
+                        isOther
+                          ? { ...filters, customIndustry: niche }
+                          : { ...filters, cuisine: niche }
+                      )
+                    }
                     className={`text-[11px] px-2.5 py-1 rounded-full border transition-all cursor-pointer ${
                       isSelected
                         ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold shadow-sm'
@@ -690,7 +891,10 @@ export const SearchForm: React.FC<SearchFormProps> = ({
                 <>
                   <Search className="w-4 h-4" />
                   <span>
-                    Search {selectedIndustry === 'Other Small Businesses' ? 'Small Businesses' : selectedIndustry}
+                    Search{' '}
+                    {isOther
+                      ? filters.customIndustry?.trim() || 'Businesses'
+                      : selectedIndustry}
                   </span>
                 </>
               )}

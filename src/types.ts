@@ -25,14 +25,32 @@ export type SocialDiscoverySource =
   | 'scanning'
   | 'unscanned';
 
+export type EmailVerificationLevel =
+  | 'verified_domain'
+  | 'site_listed'
+  | 'external_match'
+  | 'unverified';
+
+export type SocialVerificationLevel =
+  | 'website_verified'
+  | 'directory_verified'
+  | 'search_match'
+  | 'manual_entry'
+  | 'unverified';
+
 export interface SocialProfiles {
   instagram?: string; // full URL e.g. https://www.instagram.com/austinbbq/
   instagramHandle?: string; // e.g. @austinbbq
+  instagramConfidence?: SocialVerificationLevel;
   facebook?: string;
   tiktok?: string;
   twitter?: string;
   youtube?: string;
   websiteEmail?: string; // publicly listed contact email on website
+  emailSource?: string;
+  emailConfidence?: EmailVerificationLevel;
+  websiteReachable?: boolean;
+  websiteStatusCode?: number;
   source: SocialDiscoverySource;
   lastScannedAt?: string;
   instagramSearchUrl?: string;
@@ -105,6 +123,7 @@ export interface ProspectResearch {
 
 export interface SearchFilters {
   industry: string;
+  customIndustry?: string;
   city: string;
   state: string;
   cuisine: string;

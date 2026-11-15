@@ -12,13 +12,15 @@ import {
   Instagram,
   Facebook,
   Share2,
-  Search,
   Sparkles,
   RefreshCw,
   Mail,
   TrendingUp,
   MessageSquareWarning,
   ShieldAlert,
+  ShieldCheck,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { DiscoveredPlace, ProspectResearch, SocialProfiles } from '../types';
 import { computeLeadOpportunity } from '../utils/leadScoring';
@@ -39,6 +41,7 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
   isSelected,
 }) => {
   const [isScanningSocials, setIsScanningSocials] = useState(false);
+  const [copiedField, setCopiedField] = useState<'email' | 'phone' | null>(null);
 
   // Derive active socials from place or saved prospect
   const currentSocials: SocialProfiles | undefined =
@@ -47,6 +50,7 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
       ? {
           instagram: prospect.instagramUrl,
           instagramHandle: prospect.instagramHandle,
+          instagramConfidence: 'manual_entry',
           facebook: prospect.facebookUrl,
           tiktok: prospect.tiktokUrl,
           websiteEmail: prospect.contactEmail,
@@ -56,6 +60,14 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
 
   const opportunity = computeLeadOpportunity(place, prospect, currentSocials);
   const effectiveEmail = currentSocials?.websiteEmail || prospect?.contactEmail;
+
+  const handleCopy = (field: 'email' | 'phone', value: string) => {
+    if (!navigator.clipboard) return;
+    navigator.clipboard.writeText(value).then(() => {
+      setCopiedField(field);
+      setTimeout(() => setCopiedField((prev) => (prev === field ? null : prev)), 1500);
+    }).catch(() => {});
+  };
 
   const handleScanSocials = async () => {
     setIsScanningSocials(true);
@@ -115,18 +127,83 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
   };
 
   const scoreBarColor =
-    opportunity.leadScore >= 72
+    opportunity.leadScore >= 70
       ? 'from-orange-500 to-emerald-400'
-      : opportunity.leadScore >= 50
+      : opportunity.leadScore >= 46
       ? 'from-amber-500 to-yellow-400'
       : 'from-slate-500 to-slate-400';
 
   const scoreTextColor =
-    opportunity.leadScore >= 72
+    opportunity.leadScore >= 70
       ? 'text-emerald-300'
-      : opportunity.leadScore >= 50
+      : opportunity.leadScore >= 46
       ? 'text-amber-300'
       : 'text-slate-300';
+
+  const renderEmailBadge = () => {
+    if (opportunity.emailConfidence === 'verified_domain') {
+      return (
+        <span
+          className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shrink-0"
+          title="Email extracted directly from business website & matches domain"
+        >
+          Domain Verified
+        </span>
+      );
+    }
+    if (opportunity.emailConfidence === 'site_listed') {
+      return (
+        <span
+          className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30 shrink-0"
+          title="Email listed directly on the business website"
+        >
+          Site Listed
+        </span>
+      );
+    }
+    return (
+      <span
+        className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 shrink-0"
+        title="Found via directory or search — verify before outreach"
+      >
+        Search Match
+      </span>
+    );
+  };
+
+  const renderInstagramBadge = () => {
+    if (
+      opportunity.instagramConfidence === 'website_verified' ||
+      opportunity.instagramConfidence === 'manual_entry'
+    ) {
+      return (
+        <span
+          className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shrink-0"
+          title="Instagram profile linked directly on business website"
+        >
+          Site Verified
+        </span>
+      );
+    }
+    if (opportunity.instagramConfidence === 'directory_verified') {
+      return (
+        <span
+          className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30 shrink-0"
+          title="Matched from OpenStreetMap / Wikidata record"
+        >
+          Directory
+        </span>
+      );
+    }
+    return (
+      <span
+        className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 shrink-0"
+        title="Matched via Google Search — open profile to confirm"
+      >
+        Search Match
+      </span>
+    );
+  };
 
   return (
     <div
@@ -144,6 +221,18 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
           <div className="space-y-1.5 min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
               {getTierBanner()}
+              <span
+                className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded border ${
+                  opportunity.contactReadinessLabel === 'Direct Reach Verified'
+                    ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                    : opportunity.contactReadinessLabel === 'Partial Contact Info'
+                    ? 'bg-sky-500/10 text-sky-300 border-sky-500/30'
+                    : 'bg-slate-800 text-slate-400 border-slate-700'
+                }`}
+              >
+                <ShieldCheck className="w-3 h-3" />
+                <span>{opportunity.contactReadinessLabel}</span>
+              </span>
               {prospect && (
                 <span
                   className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
@@ -174,7 +263,7 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
           </div>
 
           {/* Lead Score Badge */}
-          <div className="shrink-0 text-right bg-slate-900/90 border border-slate-700/80 rounded-xl px-3 py-2 min-w-[106px]">
+          <div className="shrink-0 text-right bg-slate-900/90 border border-slate-700/80 rounded-xl px-3 py-2 min-w-[116px]">
             <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold flex items-center justify-end gap-1">
               <TrendingUp className="w-3 h-3 text-emerald-400" />
               <span>Lead Score</span>
@@ -189,11 +278,14 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
                 style={{ width: `${opportunity.leadScore}%` }}
               />
             </div>
+            <div className="text-[9px] text-slate-400 font-mono mt-1">
+              Need {opportunity.scoreBreakdown.reputationNeed} · Reach {opportunity.scoreBreakdown.reachability}
+            </div>
           </div>
         </div>
 
         {/* Key Prospect Signals Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-3 rounded-xl bg-slate-900/70 border border-slate-700/50 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 p-3 rounded-xl bg-slate-900/70 border border-slate-700/50 text-xs">
           {/* Rating & Reviews */}
           <div className="flex items-center gap-1.5 text-slate-200">
             <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400 shrink-0" />
@@ -231,23 +323,21 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
                 Scanning Instagram...
               </span>
             ) : currentSocials?.instagram ? (
-              <a
-                href={currentSocials.instagram}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-pink-300 hover:text-white font-semibold underline underline-offset-2 truncate inline-flex items-center gap-1"
-                title={`Open ${currentSocials.instagram}`}
-              >
-                <span>Instagram found</span>
-                {currentSocials.instagramHandle && (
-                  <span className="font-mono text-[11px] text-pink-400">
-                    ({currentSocials.instagramHandle})
-                  </span>
-                )}
-              </a>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <a
+                  href={currentSocials.instagram}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-pink-300 hover:text-white font-semibold underline underline-offset-2 truncate inline-flex items-center gap-1"
+                  title={`Open ${currentSocials.instagram}`}
+                >
+                  <span>{currentSocials.instagramHandle || 'Instagram'}</span>
+                </a>
+                {renderInstagramBadge()}
+              </div>
             ) : (
               <div className="flex items-center gap-1.5 text-slate-400 min-w-0">
-                <span className="truncate">No Instagram found</span>
+                <span className="truncate">No IG found</span>
                 <a
                   href={instagramSearchUrl}
                   target="_blank"
@@ -264,13 +354,28 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
           <div className="flex items-center gap-1.5 min-w-0">
             <Mail className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
             {effectiveEmail ? (
-              <a
-                href={`mailto:${effectiveEmail}`}
-                className="text-indigo-300 hover:text-white font-semibold underline underline-offset-2 truncate"
-                title={effectiveEmail}
-              >
-                Business email found
-              </a>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <a
+                  href={`mailto:${effectiveEmail}`}
+                  className="text-indigo-300 hover:text-white font-semibold underline underline-offset-2 truncate"
+                  title={effectiveEmail}
+                >
+                  {effectiveEmail}
+                </a>
+                {renderEmailBadge()}
+                <button
+                  type="button"
+                  onClick={() => handleCopy('email', effectiveEmail)}
+                  className="text-slate-400 hover:text-white p-0.5 rounded cursor-pointer shrink-0"
+                  title="Copy verified email"
+                >
+                  {copiedField === 'email' ? (
+                    <Check className="w-3 h-3 text-emerald-400" />
+                  ) : (
+                    <Copy className="w-3 h-3" />
+                  )}
+                </button>
+              </div>
             ) : (
               <span className="text-slate-500">Email not listed</span>
             )}
@@ -280,15 +385,22 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
           <div className="flex items-center gap-1.5 min-w-0">
             <Globe className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
             {place.websiteUri ? (
-              <a
-                href={place.websiteUri}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-emerald-300 hover:text-white font-semibold underline underline-offset-2 truncate"
-                title={place.websiteUri}
-              >
-                Website found ({place.websiteUri.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]})
-              </a>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <a
+                  href={place.websiteUri}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-emerald-300 hover:text-white font-semibold underline underline-offset-2 truncate"
+                  title={place.websiteUri}
+                >
+                  {place.websiteUri.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}
+                </a>
+                {currentSocials?.websiteReachable === false && (
+                  <span className="text-[9px] font-semibold px-1 py-0.5 rounded bg-rose-500/15 text-rose-300 border border-rose-500/30 shrink-0">
+                    Unreachable
+                  </span>
+                )}
+              </div>
             ) : (
               <span className="text-slate-500">Website not listed</span>
             )}
@@ -298,28 +410,30 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
           <div className="flex items-center gap-1.5 min-w-0">
             <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
             {place.nationalPhoneNumber ? (
-              <span className="text-slate-200 truncate">{place.nationalPhoneNumber}</span>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="text-slate-200 truncate font-mono">{place.nationalPhoneNumber}</span>
+                <button
+                  type="button"
+                  onClick={() => handleCopy('phone', place.nationalPhoneNumber!)}
+                  className="text-slate-400 hover:text-white p-0.5 rounded cursor-pointer shrink-0"
+                  title="Copy phone number"
+                >
+                  {copiedField === 'phone' ? (
+                    <Check className="w-3 h-3 text-emerald-400" />
+                  ) : (
+                    <Copy className="w-3 h-3" />
+                  )}
+                </button>
+              </div>
             ) : (
               <span className="text-slate-500">Phone not provided</span>
             )}
           </div>
         </div>
 
-        {/* Extra discovered social links + email chip if present */}
-        {(currentSocials?.facebook ||
-          currentSocials?.tiktok ||
-          effectiveEmail ||
-          !isAutoScanning) && (
+        {/* Extra discovered social links + Rescan button */}
+        {(currentSocials?.facebook || currentSocials?.tiktok || !isAutoScanning) && (
           <div className="flex items-center flex-wrap gap-1.5 text-[11px]">
-            {effectiveEmail && (
-              <a
-                href={`mailto:${effectiveEmail}`}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:text-white font-mono"
-              >
-                <Mail className="w-3 h-3" />
-                <span className="truncate max-w-[190px]">{effectiveEmail}</span>
-              </a>
-            )}
             {currentSocials?.facebook && (
               <a
                 href={currentSocials.facebook}
@@ -347,17 +461,17 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
                 type="button"
                 onClick={handleScanSocials}
                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-900 text-slate-400 hover:text-white border border-slate-700 hover:border-slate-500 transition-colors cursor-pointer ml-auto"
-                title="Re-scan website, open directories & Google Search for socials/email"
+                title="Re-scan website (/contact, JSON-LD), open directories & Google Search for verified contacts"
               >
-                {currentSocials?.instagram ? (
+                {currentSocials?.instagram || effectiveEmail ? (
                   <>
                     <RefreshCw className="w-3 h-3" />
-                    <span>Rescan</span>
+                    <span>Rescan Contacts</span>
                   </>
                 ) : (
                   <>
                     <Sparkles className="w-3 h-3 text-pink-400" />
-                    <span>{place.websiteUri ? 'Scan Socials' : 'Find Socials'}</span>
+                    <span>{place.websiteUri ? 'Verify Site & Socials' : 'Find Socials'}</span>
                   </>
                 )}
               </button>
@@ -399,12 +513,20 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
           <p className="text-slate-200 leading-relaxed font-medium">
             {opportunity.reviewOpportunityDetail}
           </p>
+          <p className="text-[11px] text-emerald-300/90 leading-snug pt-0.5">
+            Next step: {opportunity.actionRecommendation}
+          </p>
         </div>
 
         {/* Why this is a good prospect */}
         <div className="space-y-1.5">
-          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-            Why this is a good prospect
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="font-bold uppercase tracking-wider text-slate-400">
+              Score Breakdown &amp; Why This Prospect Fits
+            </span>
+            <span className="font-mono text-slate-400">
+              Need {opportunity.scoreBreakdown.reputationNeed}/35 · Fit {opportunity.scoreBreakdown.businessFit}/25 · Reach {opportunity.scoreBreakdown.reachability}/25 · Proof {opportunity.scoreBreakdown.confidenceBonus}/15
+            </span>
           </div>
           <ul className="space-y-1 text-xs text-slate-300">
             {opportunity.whyGoodProspect.map((reason, idx) => (

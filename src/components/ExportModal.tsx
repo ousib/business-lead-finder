@@ -66,6 +66,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ prospects, onClose }) 
       'Evidence Notes',
       'Contact Status',
       'Contact Email',
+      'Email Verification',
       'Verification Status',
     ];
 
@@ -112,6 +113,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ prospects, onClose }) 
         sanitizeCsvCell(p.inspectionNotes || 'None'),
         sanitizeCsvCell(p.contactStatus),
         sanitizeCsvCell(p.contactEmail || 'N/A'),
+        sanitizeCsvCell(p.contactEmail ? analysis.emailConfidence : 'N/A'),
         sanitizeCsvCell(p.verificationStatus),
       ];
     });
